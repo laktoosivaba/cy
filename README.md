@@ -1,2 +1,3 @@
-# cy
-nothing to see here, move along please
+# Cy
+
+An experiment in robust zero-configuration pub-sub based on CRDT that works anywhere.
