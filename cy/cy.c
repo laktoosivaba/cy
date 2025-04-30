@@ -256,24 +256,26 @@ static void bitmap_set(uint8_t* const map, const size_t index)
 }
 
 // todo fixme: do not use the occupancy map.
-static uint16_t allocate_subject_id(const uint8_t     subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES],
+static uint16_t allocate_subject_id(struct cy_t*      cy,
+                                    const uint8_t     subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES],
                                     const char* const topic_name)
 {
-    static const uint16_t lim        = CY_ALLOC_SUBJECT_COUNT;
-    uint16_t              iterations = 0U;
-    uint16_t              val        = crc16ccitt_false_string(topic_name) % lim;
-    while (bitmap_get(subject_occupancy_mask, val))
-    {
-        val = (val + 1U) % lim;
-        iterations++;
-        if (iterations > lim)
-        {
-            return CY_SUBJECT_ID_INVALID;
-        }
-    }
-    assert(val < lim);
-    bitmap_set((uint8_t*) subject_occupancy_mask, val);
-    return val;
+    // static const uint16_t lim        = CY_ALLOC_SUBJECT_COUNT;
+    // uint16_t              iterations = 0U;
+    // uint16_t              val        = crc16ccitt_false_string(topic_name) % lim;
+    // while (bitmap_get(subject_occupancy_mask, val))
+    // {
+    //     val = (val + 1U) % lim;
+    //     iterations++;
+    //     if (iterations > lim)
+    //     {
+    //         return CY_SUBJECT_ID_INVALID;
+    //     }
+    // }
+    // assert(val < lim);
+    // bitmap_set((uint8_t*) subject_occupancy_mask, val);
+    // return val;
+    return cy->rand16(cy) % CY_ALLOC_SUBJECT_COUNT;
 }
 
 static int8_t cavl_predicate_topic_name(void* const user_reference, const struct cy_tree_t* const node)
@@ -323,6 +325,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
                 const cy_now_t                   now,
+                const cy_rand16_t                rand16,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
@@ -332,6 +335,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
     assert(cy != NULL);
     assert(uid != 0);
     assert(now != NULL);
+    assert(rand16 != NULL);
     assert(publish != NULL);
     assert(subscribe != NULL);
     assert(unsubscribe != NULL);
@@ -355,6 +359,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
 
     cy->user                  = user;
     cy->now                   = now;
+    cy->rand16                = rand16;
     cy->transport_publish     = publish;
     cy->transport_subscribe   = subscribe;
     cy->transport_unsubscribe = unsubscribe;
@@ -503,7 +508,7 @@ bool cy_topic_new(struct cy_t* const       cy,  //
     // CAUTION: this will need to be updated if we allow the user to restore old allocations at initialization!
 
     // Ask the network if anyone has a valid allocation for this topic.
-    if (ok && !cy_topic_is_allocated(topic))
+    if (ok && (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT))
     {  // No problem if it fails -- we can always try again later on.
         assert(topic->subject_id == CY_SUBJECT_ID_INVALID);
         (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
@@ -543,22 +548,19 @@ cy_err_t cy_subscribe(struct cy_t* const       cy,
         last->next = sub;
     }
 
-    // If the subscriber is already active, there is nothing else to do.
-    // Otherwise, we need to check if the subject-ID is already known.
-    // If not, then, as a subscriber, we are responsible for the subject-ID allocation proposal,
-    // which involves publishing data on the network.
+    if (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT)  // This branch will not be taken for fixed topics.
+    {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
+        // The network may reject it; we will find out later.
+        topic->crdt_meta.lamport_clock++;
+        topic->crdt_meta.owner_uid = cy->uid;
+        topic->subject_id          = allocate_subject_id(cy, cy->subject_occupancy_mask, topic->name);
+        // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
+        (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
+    }
+
     cy_err_t err = 0;
     if (!topic->sub_active)
     {
-        if (!cy_topic_is_allocated(topic))  // This branch will not be taken for fixed topics.
-        {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
-            // The network may reject it; we will find out later.
-            topic->crdt_meta.lamport_clock++;
-            topic->crdt_meta.owner_uid = cy->uid;
-            topic->subject_id          = allocate_subject_id(cy->subject_occupancy_mask, topic->name);
-            // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
-            (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
-        }
         // Remember that this is a tentative allocation. It may be incorrect, in which case we will adjust it
         // and resubscribe when the corrective CRDT gossip arrives.
         err               = cy->transport_subscribe(cy, topic);
@@ -578,19 +580,20 @@ cy_err_t cy_publish(struct cy_t* const        cy,
     assert((payload.data != NULL) || (payload.size == 0));
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     cy_err_t res = 0;
-    // TODO FIXME: on a second thought, publishers should be allowed to self-allocate as well.
+    // Publishers are allowed to self-allocate as well (this used to be forbidden, only subscribers did that).
     // We are protected against data misinterpretation caused by topic collisions by the topic CRC.
-    // A self-allocating publisher will never have to drop user's data, because it will always can publish!
-    if (cy_topic_is_allocated(topic))
-    {
-        res = cy->transport_publish(cy, topic, tx_deadline_us, payload);
+    // A self-allocating publisher will never have to drop user's data, because it always can publish!
+    // FIXME code duplication
+    if (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT)  // This branch will not be taken for fixed topics.
+    {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
+        // The network may reject it; we will find out later.
+        topic->crdt_meta.lamport_clock++;
+        topic->crdt_meta.owner_uid = cy->uid;
+        topic->subject_id          = allocate_subject_id(cy, cy->subject_occupancy_mask, topic->name);
+        // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
+        (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
     }
-    else  // Publishers don't self-allocate, only subscribers do. Solicit allocation data from the network.
-    {
-        // TODO: rate limiting: do not solicit more often than five times per second.
-        topic->subject_id = CY_SUBJECT_ID_INVALID;  // Just normalization.
-        res               = gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
-    }
+    res = cy->transport_publish(cy, topic, tx_deadline_us, payload);
     topic->pub_tfer_id++;  // The transfer-ID is always incremented, even if the message is not actually published.
     return res;
 }
