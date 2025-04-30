@@ -237,22 +237,27 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const cy_transport_unsubscribe_t unsubscribe,
                 void* const                      user,
                 void* const                      heartbeat_topic_user);
-void     cy_del(struct cy_t* const cy);
+void     cy_destroy(struct cy_t* const cy);
 
 /// This function shall be invoked whenever a new transfer is received;
 /// if no transfers are received in approx. 200 ms, the function must be invoked with NULL topic and transfer.
 /// The invocation frequency SHALL NOT be lower than 1 Hz.
-cy_err_t cy_update(struct cy_t* const              cy,  //
-                   struct cy_update_event_t* const evt);
+cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
+
+/// When the transport library detects a topic CRC error, it will notify Cy about it to let it rectify the problem.
+struct cy_subject_collision_event_t
+{
+    uint16_t collision_subject_id;
+    uint16_t local_node_id;
+    uint16_t infringing_node_id;
+};
+void cy_notify_subject_collision(const struct cy_subject_collision_event_t event);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
 /// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation?
-bool cy_topic_new(struct cy_t* const       cy,  //
-                  struct cy_topic_t* const topic,
-                  const char* const        topic_name);
-void cy_topic_del(struct cy_t* const       cy,  //
-                  struct cy_topic_t* const topic);
+bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const topic_name);
+void cy_topic_destroy(struct cy_t* const cy, struct cy_topic_t* const topic);
 
 /// The application can check this to decide if it makes sense to bother publishing data on this topic.
 /// However, Cy will only solicit the network to share the allocation data on this topic if the application actually
@@ -273,7 +278,8 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 }
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
-/// One can still use the transfers from the underlying transport library before they are passed to cy_tick().
+/// One can still use the transfers from the underlying transport library before they are passed to cy_update().
+///
 /// Future expansion: add wildcard subscribers that match topic names by pattern. Requires unbounded dynamic memory.
 ///
 /// Creation of a new subscription will involve network transactions unless the subject-ID is already known or is fixed.

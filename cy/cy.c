@@ -377,7 +377,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
                                       &on_heartbeat);
     if (res < 0)
     {
-        cy_topic_del(cy, &cy->heartbeat_topic);
+        cy_topic_destroy(cy, &cy->heartbeat_topic);
     }
     return res;
 }

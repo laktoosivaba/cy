@@ -1,8 +1,42 @@
 # Cyphal named topics design
 
-An experiment in robust zero-configuration pub-sub based on CRDT that works anywhere. The design favors availability and guarantees eventual consistency. Brief periods of degraded service are possible when new nodes or topics are introduced into the network. A fully settled network is guaranteed to function just like a statically configured one. A found steady configuration can be stored to allow instant state recovery at every boot, without the usual initial period of degraded service while consensus is sought.
+An experiment in robust zero-configuration pub-sub based on CRDT that works anywhere. The design favors availability and guarantees eventual consistency. Brief periods of degraded service are possible when new nodes or new topics are introduced into the network. A fully settled network is guaranteed to function deterministically just like a statically configured one; however, the initial settling process is stochastic in its nature. A found steady configuration can be stored to allow instant deterministic state recovery at every boot, while this state does not have to be pre-configured manually like in the original design.
 
-The solution does not require special nodes (e.g., master nodes) and is fully stateless protocol-wise.
+The solution does not require special nodes (e.g., master nodes) and is fully stateless protocol-wise. Full implementation in C takes only a few hundred lines of code, does not require dynamic memory at all, and adds virtually zero error states.
+
+
+## Basic principles
+
+The solution allows one to perform pub/sub on named topics (as opposed to using integer identifiers) and to obviate the need for node-ID allocation. Thanks to this, a Cyphal network can become operational from scratch without any mandatory configuration steps --- no need to assign the node-IDs, no need to use special allocator nodes, no need to configure subject-IDs. A Cyphal node will simply appear in the network and be ready to pub/sub.
+
+A new unique-ID, or UID, is introduced to partially replace the old node-ID and the 128-bit unique-ID. The new UID is composed of a 16-bit vendor-ID regulated by the OpenCyphal maintainers (a vendor must apply to get a unique VID), 16-bit product-ID, and 32-bit instance-ID.
+
+The node-ID is now chosen by each node randomly at bootup, somewhat similar to mechanisms available in IPv6, and all incoming traffic is continuously monitored for collisions. If a collision is found, a very simple stochastic algorithm is applied to rectify it (roll a dice and either do nothing or pick a new random address with probability $q$; interestingly, the optimal choice of $q$ depends on the address space congestion). Once a conflict-free node-ID is found, it can be stored in a non-volatile memory to ensure the network is immediately conflict-free on the next bootup (unless new nodes are introduced). This algorithm will be referred to as the "optimistic DAD" (DAD for duplicate address detection; optimistic because we simply redraw a random number per collision without any further considerations). The probabilistic analysis of this problem is nontrivial.
+
+The subject-IDs for named topics are chosen by all nodes in consensus using a kind of conflict-free replicated data type (CRDT) using a simple and fully stateless protocol relying only on the (modified) heartbeat message for communication. The CRDT is a mapping between topic name and its subject-ID. CRDT entries are constantly exchanged between nodes to let them stay in sync, and to cross-check each other. When a node needs to utilize a named topic, it will consult with its local copy of the table. If such entry is found, it is used as-is. If no such entry is found, the local node will speculatively allocate a new entry, add it to the table, and immediately publish it to let all other nodes incorporate it into their tables, or to object if conflicts are found.
+
+Message loss is not a problem because every node continuously scans and publishes every entry from its table. Should a loss occur, it will be mitigated at the next scan performed by any online node that knows this topic. Every node needs only to keep table entries that it uses itself.
+
+When a new entry needs to be added, the new subject-ID proposal is computed as a deterministic hash from the topic name, mapping the name into `[0, 6144)`. It is important that the hash is deterministic. Several nodes attempting to pub/sub on the same topic while residing in partitioned parts of the network will still agree on the specific subject-ID. That is, unless there is a hash collision. Given 6144 possible hash values, the probability of two topics colliding is only 0.016%; however, this probability grows nonlinearly with the number of topics (birthday paradox): at 100 topics the collision probability is already 55.5%.
+
+A collision will be discovered and remedied by the normal CRDT gossip protocol eventually as will be described below; however, this promise of an eventual resolution is not good enough because while the CRDT is making its slow progress, much faster application data streams may be exchanged over the conflicting subjects, which is disastrous as it may cause data misinterpretation by the application. To avoid this, the transport layer is extended with a topic name hash attached to every transport frame; this is a no-brainer for all transports (in UDP and serial there is an unused 16-bit header field already) except Cyphal/CAN, where slightly different reasoning applies (discussed separately). The transport libraries (libudpard, libserard, etc.) will be modified to check for the topic name hash correctness for all incoming frames (unless none is defined for a given subscription, which is the case for the ordinary unnamed old v1 subjects); similarly, it will populate the topic CRC for all outgoing frames. This simple remedy will allow the transport layer to function even in the face of a subject collision, albeit in a degraded mode, while waiting for CRDT to resolve the problem.
+
+It is essential that the topic name hash functions used for the CRC and for choosing the subject-ID are distinct to minimize collisions.
+
+If a topic name CRC mismatch is found on the transport layer, a notification is delivered to the CRDT layer to let it rectify the situation. In the ideal scenario, we would have relied on the Lamport clock and UID to decide which topic needs to move to a new subject-ID; however, when we get a collision alert from the transport layer we don't know which other topic is infringing on our subject, all we know is that someone is. There are two major approaches here:
+
+1. Instead of making new subject-ID allocations using a deterministic hash function, simply pick them at random.
+2. Introduce a kind of nonce to allow multi-round picks per topic name, such that different topic names cause the hash functions to take different trajectories.
+
+The first one, where we simply pick random numbers instead of deterministic allocations, is very simple, but it has two issues: 1. partitioned networks will allocate differently, which will require moving topics between subjects after de-partitioning (not a deal breaker but it does cause a transient disruption); 2. networks with a large number of topics will require many random picks to settle. The specific number of steps can be derived analytically, but the derivation (based on dynamic programming) is a computationally hard problem. A simpler Monte-Carlo simulation predicts that a network with 1000 topics will require more than 5 picking rounds to settle with a probability of ~10%; the probability that more than 8 rounds are needed is negligible. For 3000 topics, the probability of needing more than 15 picking rounds is almost 4%.
+
+Given $k=2$ actors competing for the same identifier, the strategy to settle on distinct identifiers in the least number of turns is to let each pick a new value at each turn. If $k$ is large, the optimal strategy is to let each actor do nothing upon collision detection with some probability $q$; it makes sense because if all actors redraw, the original slot that caused the collision will remain empty. The basic case of $q=1$ works well for small networks where the number of nodes $N$ is much less than the address space $M$ (128 for Cyphal/CAN, 65534 for the other transports). At higher $N$, the optimal $q$ is reduced. See `optimistic_dad_montecarlo.py`.
+
+This problem has commonalities with the ordinary retry-backoff CSMA/CD, where instead of drawing numerical identifiers, participants compete for the air time. Since $N$ is not statically known, one idea here is to slowly exponentially reduce $q$ at every collision from the original value of one, until some reasonable minimum is reached.
+
+Monte-Carlo simulation predicts that for CAN, a network with 32 nodes has the optimal $q \approx 0.75$, allowing it to settle in under 8 steps almost always. With 64 nodes, $q \approx 0.5$ yields better results of at most 23 draws.
+
+Moving on to the second approach: suppose our hash function applied to two distinct topic names yields the same $s$, thus a collision. To allow the algorithm to make progress, the next round must be likely to yield distinct hash values despite the collision at this round.
 
 
 ## Heartbeat extension
@@ -17,7 +51,7 @@ uint16  value           # Ignore if the name is empty.
 void48
 
 @assert _offset_ == {192}
-utf8[<=80] name
+utf8[<=80] name         # Name offset is 25 bytes (200 bits) from the message origin.
 
 @sealed
 ```
