@@ -34,13 +34,13 @@ Given $k=2$ actors competing for the same identifier, the strategy to settle on 
 
 A Monte-Carlo simulation of the topic allocation problem in a network of 3000 topics yields best results of 34 rounds with $q=0.5$ (even 0.4 and 0.6 yield poorer results). Same with 1000 topics reaches consensus in 8 rounds with $q=0.75$ (11 rounds with $q=0.5$).
 
-This problem has commonalities with the ordinary retry-backoff CSMA/CD, where instead of drawing numerical identifiers, participants compete for the air time. Since $N$ is not statically known, one idea here is to slowly exponentially reduce $q$ at every collision from the original value of one, until some reasonable minimum is reached.
+This problem has commonalities with the ordinary retry-backoff CSMA/CD, where instead of drawing numerical identifiers, participants compete for the air time. Since $N$ is not statically known, one idea here is to slowly exponentially reduce $q$ at every collision (e.g., $q^\prime = 0.95 q$) from the original value of one, until some reasonable minimum (0.5) is reached. Another desirable side effect is that a node that has seen more collisions will be more likely to keep its allocated value, meaning that newcomers will be more likely to adapt to the network than the other way around.
 
 Monte-Carlo simulation predicts that for CAN, a network with 32 nodes has the optimal $q \approx 0.75$, allowing it to settle in under 8 steps almost always. With 64 nodes, $q \approx 0.5$ yields better results of at most 23 draws.
 
 Moving on to the second approach: suppose our hash function applied to two distinct topic names yields the same $s$, thus a collision. To allow the algorithm to make progress, the next round must be likely to yield distinct hash values despite the collision at this round. **THERE IS INTEREST IN APPLYING A SIMILAR STRATEGY TO THE OPTIMISTIC DAD**, where, for example, the initial node-ID is some hash of the UID, and every subsequent pick drives each node-ID along its unique trajectory defined by the UID. It is unclear yet if this is statistically sensible.
 
-A possible middle-ground solution could be to choose the first allocation deterministically, and use random draws if a collision is found.
+A possible middle-ground solution could be to choose the first allocation deterministically, and use random draws if a collision is found. Every time a collision is handled, $q$ will exponentially decay as outlined above until it reaches some low value.
 
 
 ## Heartbeat extension
