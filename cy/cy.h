@@ -12,7 +12,11 @@ extern "C"
 #endif
 
 /// A sensible middle ground between worst-case gossip traffic and memory utilization vs. longest name support.
+/// In CAN FD networks, topic names should not be longer than 22 bytes to avoid multi-frame heartbeats.
 #define CY_TOPIC_NAME_MAX 80
+
+/// The max namespace length should also provide space for at least one separator and the one-character topic name.
+#define CY_NAMESPACE_NAME_MAX (CY_TOPIC_NAME_MAX - 2)
 
 /// If not sure, use this value for the transfer-ID timeout.
 #define CY_TFER_ID_TIMEOUT_DEFAULT_us 2000000UL
@@ -79,6 +83,7 @@ typedef uint64_t (*cy_now_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
 /// The function shall not increment the transfer-ID counter; Cy will do it.
+/// This function is only invoked when the topic object has a valid subject-ID.
 typedef cy_err_t (*cy_transport_publish_t)(struct cy_t*, struct cy_topic_t*, uint64_t, struct cy_payload_t);
 
 /// Instructs the underlying transport layer to create a new subscription on the topic.
@@ -101,9 +106,11 @@ struct cy_topic_t
     struct cy_tree_t index_name;
     struct cy_tree_t index_subject_id;
 
-    const char* name;
-    uint64_t    name_hash;
-    uint16_t    name_crc;
+    /// The name is always null-terminated. We keep the size for convenience as well.
+    size_t   name_len;
+    char     name[CY_TOPIC_NAME_MAX + 1];
+    uint64_t name_hash;
+    uint16_t name_crc;
 
     uint16_t subject_id;
     bool     fixed;  ///< True if the ID is assigned directly; e.g., "/7509".
@@ -159,6 +166,10 @@ struct cy_t
 
     uint8_t subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES];
 
+    /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
+    size_t namespace_len;
+    char   namespace_[CY_NAMESPACE_NAME_MAX + 1];
+
     /// Returns the current monotonic time in microseconds.
     cy_now_t now;
 
@@ -168,7 +179,11 @@ struct cy_t
     cy_transport_subscribe_t   transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
 
+    size_t   heartbeat_gossip_scan_index;
+    uint64_t heartbeat_last_us;
+
     /// Topics needed by Cy itself.
+    /// TODO FIXME: subscribe to the old uavcan.node.port.List to update the occupancy bitmap.
     struct cy_topic_t heartbeat_topic;
     struct cy_sub_t   heartbeat_sub;
 
@@ -179,15 +194,18 @@ struct cy_t
 
 struct cy_update_event_t
 {
-    struct cy_topic_t*      topic;
+    struct cy_topic_t*      topic;  ///< Topic associated with the transport subscription by the lib*ards.
     uint64_t                ts_us;
     struct cy_tfer_meta_t   tfer;
     uint16_t                topic_crc;
     struct cy_payload_mut_t payload;
 };
 
+/// The namespace may be NULL or empty, in which case it defaults to "~".
+/// This function will never perform any network exchanges.
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
+                const char* const                namespace_,
                 void* const                      user,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
@@ -204,11 +222,30 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
+/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation?
 bool cy_topic_new(struct cy_t* const       cy,  //
                   struct cy_topic_t* const topic,
                   const char* const        topic_name);
 void cy_topic_del(struct cy_t* const       cy,  //
                   struct cy_topic_t* const topic);
+
+/// The application can check this to decide if it makes sense to bother publishing data on this topic.
+/// However, Cy will only solicit the network to share the allocation data on this topic if the application actually
+/// does attempt to publish data on it at least once.
+inline bool cy_topic_is_allocated(const struct cy_topic_t* const topic)
+{
+    return topic->subject_id < CY_TOTAL_SUBJECT_COUNT;
+}
+
+inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)
+{
+    return topic->pub_tfer_id > 0;
+}
+
+inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
+{
+    return topic->sub_list != NULL;
+}
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
 /// One can still use the transfers from the underlying transport library before they are passed to cy_tick().
@@ -224,10 +261,13 @@ cy_err_t cy_sub_new(struct cy_t* const       cy,
                     void (*const callback)(const struct cy_sub_event_t*));
 void     cy_sub_del(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
 
+/// TRADEOFF: published messages are silently discarded until the topic is allocated.
 cy_err_t cy_pub(struct cy_t* const        cy,
                 struct cy_topic_t* const  topic,
                 const uint64_t            tx_deadline_us,
                 const struct cy_payload_t payload);
+
+// TODO FIXME getters/setters for the user-modifiable and user-readable fields.
 
 #ifdef __cplusplus
 }
