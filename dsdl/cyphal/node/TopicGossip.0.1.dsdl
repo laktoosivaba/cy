@@ -1,0 +1,16 @@
+# Come back later.
+
+UID.0.1 owner_uid       # For tie breaking within the same Lamport clock.
+uint32  lamport_clock   # Assume the lag will not exceed 2**31-1 ticks.
+uint32  ttl_ms          # [milliseconds] Value eligible for reuse in approx. this time.
+uint16  value           # Ignore if the name is empty.
+
+void48
+
+@assert _offset_ == {192}
+
+utf8[<=80] name
+# An empty name indicates an invalid/empty record.
+# The offset of the first byte of the name is 200 bits, or 25 bytes.
+
+@sealed

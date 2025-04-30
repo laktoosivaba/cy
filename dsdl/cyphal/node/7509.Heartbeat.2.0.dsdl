@@ -1,0 +1,35 @@
+# Abstract node status information and CRDT gossip carrier.
+# This is the only high-level function that shall be implemented by all nodes.
+#
+# This Heartbeat v2 is wire-compatible with the original uavcan.node.Heartbeat.1, but adds more data,
+# while obsoleting the mode and health fields as they do not belong to its scope. New nodes should use
+# application-specific means of status reporting instead; Cyphal does not define the application layer.
+
+uint16 PUBLICATION_PERIOD_PREFERRED_ms =  200
+uint16 PUBLICATION_PERIOD_MAX_ms       = 1000
+
+uint16 OFFLINE_TIMEOUT_ms = 3000
+# If the last message from the node was received more than this amount of time ago, it should be considered offline.
+
+uint32 uptime  # [second]
+# Other nodes may detect that a remote node has restarted when this value leaps backward.
+
+void32
+# In the v1 Heartbeat, this place used to contain the health, mode, and vendor-specific status code fields.
+# These have been removed because they pertain to the application layer and are thus outside of the scope of
+# the heartbeat message. This space may be reused for something else in the future.
+#
+# Subscribers using the old v1 Heartbeat type will interpret this message as if it had nominal health,
+# operational mode, and zero vendor-specific status code.
+#
+# Additional 8 bits of padding have been added to enable type punning.
+
+UID.0.1 uid
+# This 64-bit value completely and uniquely identifies the node: its vendor, product type, and specific instance.
+
+@assert _offset_ == {128}
+
+TopicGossip.0.1 topic_gossip
+# Carries a single entry from the CRDT topic table.
+
+@extent 200 * 8
