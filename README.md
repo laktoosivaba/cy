@@ -32,11 +32,15 @@ The first one, where we simply pick random numbers instead of deterministic allo
 
 Given $k=2$ actors competing for the same identifier, the strategy to settle on distinct identifiers in the least number of turns is to let each pick a new value at each turn. If $k$ is large, the optimal strategy is to let each actor do nothing upon collision detection with some probability $q$; it makes sense because if all actors redraw, the original slot that caused the collision will remain empty. The basic case of $q=1$ works well for small networks where the number of nodes $N$ is much less than the address space $M$ (128 for Cyphal/CAN, 65534 for the other transports). At higher $N$, the optimal $q$ is reduced. See `optimistic_dad_montecarlo.py`.
 
+A Monte-Carlo simulation of the topic allocation problem in a network of 3000 topics yields best results of 34 rounds with $q=0.5$ (even 0.4 and 0.6 yield poorer results). Same with 1000 topics reaches consensus in 8 rounds with $q=0.75$ (11 rounds with $q=0.5$).
+
 This problem has commonalities with the ordinary retry-backoff CSMA/CD, where instead of drawing numerical identifiers, participants compete for the air time. Since $N$ is not statically known, one idea here is to slowly exponentially reduce $q$ at every collision from the original value of one, until some reasonable minimum is reached.
 
 Monte-Carlo simulation predicts that for CAN, a network with 32 nodes has the optimal $q \approx 0.75$, allowing it to settle in under 8 steps almost always. With 64 nodes, $q \approx 0.5$ yields better results of at most 23 draws.
 
-Moving on to the second approach: suppose our hash function applied to two distinct topic names yields the same $s$, thus a collision. To allow the algorithm to make progress, the next round must be likely to yield distinct hash values despite the collision at this round.
+Moving on to the second approach: suppose our hash function applied to two distinct topic names yields the same $s$, thus a collision. To allow the algorithm to make progress, the next round must be likely to yield distinct hash values despite the collision at this round. **THERE IS INTEREST IN APPLYING A SIMILAR STRATEGY TO THE OPTIMISTIC DAD**, where, for example, the initial node-ID is some hash of the UID, and every subsequent pick drives each node-ID along its unique trajectory defined by the UID. It is unclear yet if this is statistically sensible.
+
+A possible middle-ground solution could be to choose the first allocation deterministically, and use random draws if a collision is found.
 
 
 ## Heartbeat extension

@@ -5,11 +5,11 @@ Monte‑Carlo simulation for the identifier‑collision algorithm described in t
 conversation.  It lets you explore how the parameters affect the time until all
 participants hold unique identifiers.
 
-Identifiers are integers in the range 0 … M (inclusive).  There are N
+Identifiers are integers in the range 0 … M (inclusive).  There are N
 participants.  Whenever two or more participants share the same identifier, any
 individual member of that collision group redraws with independent probability
-q (0 < q ≤ 1).  A redraw means picking a fresh identifier uniformly at random
-from 0 … M.
+q (0 < q ≤ 1).  A redraw means picking a fresh identifier uniformly at random
+from 0 … M.
 
 --------------------------------------------------------------------------
 COMMAND‑LINE USAGE
@@ -165,9 +165,9 @@ def _cli():
     )
     parser.add_argument("--trials", type=int, default=10_000, help="number of Monte‑Carlo runs")
     parser.add_argument("--N", type=int, required=True, help="number of participants")
-    parser.add_argument("--M", type=int, required=True, help="identifiers range 0 … M")
+    parser.add_argument("--M", type=int, required=True, help="identifiers range 0 … M")
     parser.add_argument("--q", type=float, default=0.25, help="redraw probability for a colliding node (0<q≤1)")
-    parser.add_argument("--K", type=int, default=None, help="report probability that convergence ≤ K steps")
+    parser.add_argument("--K", type=int, default=None, help="report probability that convergence ≤ K steps")
     parser.add_argument("--seed", type=int, default=None, help="PRNG seed for reproducibility")
 
     args = parser.parse_args()
