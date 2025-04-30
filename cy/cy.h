@@ -28,15 +28,21 @@ extern "C"
 
 /// The range of unregulated identifiers to use for CRDT topic allocation.
 /// The range should be the same for all applications, so that they can all make deterministic and identical
-/// subject-ID allocations even when the network is partitioned.
-/// Larger ranges are preferable because they reduce the probability of collisions, and thus the probability
-/// and duration of temporary service disruptions when the network is healing after de-partitioning.
-#define CY_CRDT_SUBJECT_COUNT 6144
+/// subject-ID allocations even when the network is partitioned. This is not strictly necessary, but it reduces the
+/// likelihood of collisions and the duration of temporary service disruptions when the network is healing after
+/// de-partitioning. The range should also be as large as possible for the same reason.
+///
+/// Fixed topics (such as the old v1 topics with manually assigned IDs) should not be allocated in the CRDT range,
+/// because old v1 nodes to not participate in the CRDT gossip, and are unable to alert the network about conflicts.
+/// This problem is addressed by the occupancy mask, but it has downsides of its own (does not allow freeing topics,
+/// needs 768 bytes of memory), so we prefer a simpler solution of having to force static topics into the higher IDs
+/// range, in [6144, 8192).
+#define CY_ALLOC_SUBJECT_COUNT 6144
 #define CY_TOTAL_SUBJECT_COUNT 8192
 
 #define CY_SUBJECT_ID_INVALID 0xFFFFU
 
-#define CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES ((CY_CRDT_SUBJECT_COUNT + 7) / 8)
+#define CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES ((CY_ALLOC_SUBJECT_COUNT + 7) / 8)
 
 typedef int8_t cy_err_t;
 
@@ -107,8 +113,14 @@ struct cy_topic_t
     struct cy_tree_t index_subject_id;
 
     /// The name is always null-terminated. We keep the size for convenience as well.
-    size_t   name_len;
-    char     name[CY_TOPIC_NAME_MAX + 1];
+    size_t name_len;
+    char   name[CY_TOPIC_NAME_MAX + 1];
+    /// Assuming we have 1000 topics on the local node, the probability of a topic name hash collision is:
+    /// >>> from decimal import Decimal
+    /// >>> n = 1000
+    /// >>> d = Decimal(2**64)
+    /// >>> 1 - ((d-1)/d) ** ((n*(n-1))//2)
+    /// About 2.7e-14, or one in 37 trillion.
     uint64_t name_hash;
     uint16_t name_crc;
 
@@ -164,6 +176,19 @@ struct cy_t
     /// The user can use this field for arbitrary purposes.
     void* user;
 
+    // TODO FIXME: this is not really required. We can allocate topics just by looking at the subject tree.
+    // If a remote node finds a collision, it will bump the allocation until it has no local conflicts;
+    // every other node will keep doing it until the network agrees on the same allocation.
+    //
+    // The occupancy mask allows one node to quickly find a free subject-ID with a low probability of having to
+    // reallocate again; however, its disadvantage is that occupancy bits are only set, but never cleared,
+    // causing the free subjects to deplete over time if new topics keep appearing and disappearing.
+    // Another disadvantage is that it takes 768 bytes of memory.
+    //
+    // The occupancy mask could allow the old v1 nodes to share the same subject-ID space with the new nodes,
+    // because it could be used by subscribing to uavcan.node.port.List and then updating the mask from that message,
+    // but it is probably not worth it because a better solution is available: simply segregate the subject-ID space
+    // between the dynamic CRDT topics and the old fixed subject-IDs.
     uint8_t subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES];
 
     /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
@@ -197,7 +222,7 @@ struct cy_update_event_t
     struct cy_topic_t*      topic;  ///< Topic associated with the transport subscription by the lib*ards.
     uint64_t                ts_us;
     struct cy_tfer_meta_t   tfer;
-    uint16_t                topic_crc;
+    uint16_t                topic_crc;  ///< TODO FIXME: Remove! Topic CRC will be managed by the lib*ards, not here!
     struct cy_payload_mut_t payload;
 };
 
@@ -206,11 +231,11 @@ struct cy_update_event_t
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
-                void* const                      user,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
+                void* const                      user,
                 void* const                      heartbeat_topic_user);
 void     cy_del(struct cy_t* const cy);
 
@@ -253,19 +278,21 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 ///
 /// Creation of a new subscription will involve network transactions unless the subject-ID is already known or is fixed.
 /// However, the operation is non-blocking --- the message will be enqueued and sent in the background.
-cy_err_t cy_sub_new(struct cy_t* const       cy,
-                    struct cy_topic_t* const topic,
-                    struct cy_sub_t* const   sub,
-                    const size_t             extent,
-                    const uint64_t           tfer_id_timeout_us,
-                    void (*const callback)(const struct cy_sub_event_t*));
-void     cy_sub_del(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
+///
+/// It is allowed to remove the subscription from its own callback, but not from the callback of another subscription.
+cy_err_t cy_subscribe(struct cy_t* const       cy,
+                      struct cy_topic_t* const topic,
+                      struct cy_sub_t* const   sub,
+                      const size_t             extent,
+                      const uint64_t           tfer_id_timeout_us,
+                      void (*const callback)(const struct cy_sub_event_t*));
+void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
 
 /// TRADEOFF: published messages are silently discarded until the topic is allocated.
-cy_err_t cy_pub(struct cy_t* const        cy,
-                struct cy_topic_t* const  topic,
-                const uint64_t            tx_deadline_us,
-                const struct cy_payload_t payload);
+cy_err_t cy_publish(struct cy_t* const        cy,
+                    struct cy_topic_t* const  topic,
+                    const uint64_t            tx_deadline_us,
+                    const struct cy_payload_t payload);
 
 // TODO FIXME getters/setters for the user-modifiable and user-readable fields.
 

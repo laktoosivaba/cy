@@ -14,7 +14,7 @@
 
 #define HEARTBEAT_TOPIC_NAME "/7509"
 #define HEARTBEAT_EXTENT 200
-#define HEARTBEAT_PUB_PERIOD_us 200000UL
+#define HEARTBEAT_PUB_PERIOD_us CY_UPDATE_INTERVAL_MIN_us
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
 
 // ----------------------------------------  CRC-16-CCITT-FALSE  ----------------------------------------
@@ -227,14 +227,14 @@ static uint16_t parse_fixed_subject_id(const char* s)
     {
         return CY_SUBJECT_ID_INVALID;
     }
-    uint64_t out = 0U;
+    uint32_t out = 0U;
     while (*s != '\0')
     {
         if ((*s < '0') || (*s > '9'))
         {
             return CY_SUBJECT_ID_INVALID;
         }
-        out = (uint16_t) ((out * 10U) + (*s - '0'));
+        out = (out * 10U) + (*s - '0');
         s++;
         if (out >= CY_TOTAL_SUBJECT_COUNT)
         {
@@ -255,10 +255,11 @@ static void bitmap_set(uint8_t* const map, const size_t index)
     map[index / BYTE_BITS] |= (uint8_t) (1U << (index % BYTE_BITS));
 }
 
+// todo fixme: do not use the occupancy map.
 static uint16_t allocate_subject_id(const uint8_t     subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES],
                                     const char* const topic_name)
 {
-    static const uint16_t lim        = CY_CRDT_SUBJECT_COUNT;
+    static const uint16_t lim        = CY_ALLOC_SUBJECT_COUNT;
     uint16_t              iterations = 0U;
     uint16_t              val        = crc16ccitt_false_string(topic_name) % lim;
     while (bitmap_get(subject_occupancy_mask, val))
@@ -321,11 +322,11 @@ static void on_heartbeat(const struct cy_sub_event_t* const evt)
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
-                void* const                      user,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
+                void* const                      user,
                 void* const                      heartbeat_topic_user)
 {
     assert(cy != NULL);
@@ -368,12 +369,12 @@ cy_err_t cy_new(struct cy_t* const               cy,
     assert(topic_ok);
     cy->heartbeat_topic.user = heartbeat_topic_user;
 
-    const cy_err_t res = cy_sub_new(cy,
-                                    &cy->heartbeat_topic,
-                                    &cy->heartbeat_sub,
-                                    HEARTBEAT_EXTENT,
-                                    CY_TFER_ID_TIMEOUT_DEFAULT_us,
-                                    &on_heartbeat);
+    const cy_err_t res = cy_subscribe(cy,
+                                      &cy->heartbeat_topic,
+                                      &cy->heartbeat_sub,
+                                      HEARTBEAT_EXTENT,
+                                      CY_TFER_ID_TIMEOUT_DEFAULT_us,
+                                      &on_heartbeat);
     if (res < 0)
     {
         cy_topic_del(cy, &cy->heartbeat_topic);
@@ -397,6 +398,7 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
             struct cy_sub_t* sub = evt->topic->sub_list;
             while (sub != NULL)
             {
+                struct cy_sub_t* const next = sub->next;  // In case the callback deletes this subscription.
                 if (sub->callback != NULL)
                 {
                     sub->callback(&(struct cy_sub_event_t) {
@@ -408,7 +410,7 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
                         .payload = evt->payload,
                     });
                 }
-                sub = sub->next;
+                sub = next;
             }
         }
 
@@ -420,7 +422,8 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
         }
     }
 
-    /// We could have transmitted a heartbeat in response to someone asking for an allocation.
+    /// We could have transmitted a heartbeat in response to someone asking for an allocation,
+    /// or our own proposal, or as a corrective entry if a conflict is found.
     /// If that happened, we don't want to transmit another heartbeat immediately to regulate the traffic.
     /// This is why we check for the time here at the end, after the incoming transfer is handled.
     if ((res >= 0) && ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us))
@@ -428,16 +431,16 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
         // TODO: linear traversal at each iteration is stupid; need a better solution.
         // Cache/invalidate tree nodes? Build a new index just for iterative gossip? Adjust publication order such that
         // the least recently seen topics are published first? Probably a new index for that is not a bad idea.
-        const struct cy_tree_t* top_tree = cavlIndex(cy->topics_by_name, cy->heartbeat_gossip_scan_index);
-        if (top_tree == NULL)
+        const struct cy_tree_t* tre = cavlIndex(cy->topics_by_name, cy->heartbeat_gossip_scan_index);
+        if (tre == NULL)
         {
             cy->heartbeat_gossip_scan_index = 0;
-            top_tree                        = cavlIndex(cy->topics_by_name, cy->heartbeat_gossip_scan_index);
+            tre                             = cavlIndex(cy->topics_by_name, cy->heartbeat_gossip_scan_index);
         }
         cy->heartbeat_gossip_scan_index++;
-        assert(top_tree != NULL);  // We always have at least the heartbeat topic.
+        assert(tre != NULL);  // We always have at least the heartbeat topic.
         const struct cy_topic_t* const gossip_topic =
-            (const struct cy_topic_t*) (((const char*) top_tree) - offsetof(struct cy_topic_t, index_name));
+            (const struct cy_topic_t*) (((const char*) tre) - offsetof(struct cy_topic_t, index_name));
 
         res = gossip(cy, gossip_topic->crdt_meta, gossip_topic->subject_id, gossip_topic->name);
     }
@@ -501,20 +504,20 @@ bool cy_topic_new(struct cy_t* const       cy,  //
 
     // Ask the network if anyone has a valid allocation for this topic.
     if (ok && !cy_topic_is_allocated(topic))
-    {
-        // No problem if it fails -- we can always try again later on.
+    {  // No problem if it fails -- we can always try again later on.
+        assert(topic->subject_id == CY_SUBJECT_ID_INVALID);
         (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
     }
 
     return ok;
 }
 
-cy_err_t cy_sub_new(struct cy_t* const       cy,
-                    struct cy_topic_t* const topic,
-                    struct cy_sub_t* const   sub,
-                    const size_t             extent,
-                    const uint64_t           tfer_id_timeout_us,
-                    void (*const callback)(const struct cy_sub_event_t*))
+cy_err_t cy_subscribe(struct cy_t* const       cy,
+                      struct cy_topic_t* const topic,
+                      struct cy_sub_t* const   sub,
+                      const size_t             extent,
+                      const uint64_t           tfer_id_timeout_us,
+                      void (*const callback)(const struct cy_sub_event_t*))
 {
     assert(topic != NULL);
     assert(sub != NULL);
@@ -547,34 +550,37 @@ cy_err_t cy_sub_new(struct cy_t* const       cy,
     cy_err_t err = 0;
     if (!topic->sub_active)
     {
-        if (cy_topic_is_allocated(topic))
-        {
-            err               = cy->transport_subscribe(cy, topic);
-            topic->sub_active = err >= 0;
-        }
-        else
+        if (!cy_topic_is_allocated(topic))  // This branch will not be taken for fixed topics.
         {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
             // The network may reject it; we will find out later.
             topic->crdt_meta.lamport_clock++;
             topic->crdt_meta.owner_uid = cy->uid;
             topic->subject_id          = allocate_subject_id(cy->subject_occupancy_mask, topic->name);
-            // TODO: gossip errors should be ignored?
-            err = gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
+            // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
+            (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
         }
+        // Remember that this is a tentative allocation. It may be incorrect, in which case we will adjust it
+        // and resubscribe when the corrective CRDT gossip arrives.
+        err               = cy->transport_subscribe(cy, topic);
+        topic->sub_active = err >= 0;
     }
 
     return err;
 }
 
-cy_err_t cy_pub(struct cy_t* const        cy,
-                struct cy_topic_t* const  topic,
-                const uint64_t            tx_deadline_us,
-                const struct cy_payload_t payload)
+cy_err_t cy_publish(struct cy_t* const        cy,
+                    struct cy_topic_t* const  topic,
+                    const uint64_t            tx_deadline_us,
+                    const struct cy_payload_t payload)
 {
     assert(cy != NULL);
     assert(topic != NULL);
     assert((payload.data != NULL) || (payload.size == 0));
+    assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     cy_err_t res = 0;
+    // TODO FIXME: on a second thought, publishers should be allowed to self-allocate as well.
+    // We are protected against data misinterpretation caused by topic collisions by the topic CRC.
+    // A self-allocating publisher will never have to drop user's data, because it will always can publish!
     if (cy_topic_is_allocated(topic))
     {
         res = cy->transport_publish(cy, topic, tx_deadline_us, payload);
