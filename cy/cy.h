@@ -104,7 +104,7 @@ struct cy_crdt_meta_t
 
 struct cy_topic_t
 {
-    struct cy_tree_t index_name;
+    struct cy_tree_t index_hash;
     struct cy_tree_t index_subject_id;
 
     struct cy_t* cy;
@@ -199,14 +199,6 @@ struct cy_t
     size_t topic_count;
 };
 
-struct cy_update_event_t
-{
-    struct cy_topic_t*      topic;  ///< Topic associated with the transport subscription by the lib*ards.
-    uint64_t                ts_us;
-    struct cy_tfer_meta_t   tfer;
-    struct cy_payload_mut_t payload;
-};
-
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 /// This function will never perform any network exchanges.
 cy_err_t cy_new(struct cy_t* const               cy,
@@ -220,20 +212,26 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 void* const                      heartbeat_topic_user);
 void     cy_destroy(struct cy_t* const cy);
 
-/// This function shall be invoked whenever a new transfer is received;
-/// if no transfers are received in approx. 200 ms, the function must be invoked with NULL topic and transfer.
-/// The invocation frequency SHALL NOT be lower than 1 Hz.
+/// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200 ms,
+/// the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
+struct cy_update_event_t
+{
+    struct cy_topic_t*      topic;  ///< Topic associated with the transport subscription by the lib*ards.
+    uint64_t                ts_us;
+    struct cy_tfer_meta_t   tfer;
+    struct cy_payload_mut_t payload;
+};
 cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
 
 /// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the problem.
 /// Transport frames with mismatched discriminators must be dropped; no processing at the transport layer is needed.
+/// The function may emit one transfer; the result of the emission is returned. Transient errors can be safely ignored.
+///
 /// If the transport library is unable to efficiently find the topic when a collision is found,
 /// use cy_topic_find_by_subject_id().
-/// The function will emit one transfer; the result of the emission is returned. Transient errors can be safely ignored.
-/// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining:
-///
-///     cy_notify_discriminator_mismatch(cy_topic_find_by_subject_id(cy, collision_id));
-cy_err_t cy_notify_discriminator_mismatch(const struct cy_topic_t* topic);
+/// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining like:
+///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_id));
+cy_err_t cy_notify_discriminator_collision(const struct cy_topic_t* topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
@@ -281,7 +279,6 @@ cy_err_t cy_subscribe(struct cy_topic_t* const topic,
                       const cy_sub_callback_t  callback);
 void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
 
-/// TRADEOFF: published messages are silently discarded until the topic is allocated.
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
 
 // TODO FIXME getters/setters for the user-modifiable and user-readable fields.
