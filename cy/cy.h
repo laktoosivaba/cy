@@ -123,7 +123,7 @@ struct cy_topic_t
     /// >>> 1 - ((d-1)/d) ** ((n*(n-1))//2)
     /// About 2.7e-14, or one in 37 trillion.
     ///
-    /// For stationary topics, the name hash equals the subject-ID.
+    /// For pinned topics, the name hash equals the subject-ID.
     /// This ensures that the preferred subject-ID is still found using (hash % CY_ALLOC_SUBJECT_COUNT);
     /// also, it ensures that the discriminator (hash >> 48) is zero, thus disabling its check.
     uint64_t hash;
@@ -139,7 +139,7 @@ struct cy_topic_t
     /// Stationary topics must NOT check the discriminator for collisions, to ensure compatibility with old
     /// deployments. Valid discriminator must still be populated for outgoing transfers, though, for future
     /// compatibility.
-    bool stationary;
+    bool pinned;
 
     struct cy_crdt_meta_t crdt_meta;
 
@@ -269,7 +269,7 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 /// Topic discriminator is transmitted with every transport frame for subject-ID collision detection.
 /// It is defined as the 16 most significant bits of the topic name hash, while the least significant bits are
 /// used for deterministic subject-ID allocation. The two numbers must be uncorrelated to minimize collisions.
-/// For stationary topics, the discriminator is zero because we don't want to check it for compatibility with old
+/// For pinned topics, the discriminator is zero because we don't want to check it for compatibility with old
 /// nodes; this is ensured by our special topic hash function.
 inline uint16_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {

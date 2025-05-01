@@ -267,10 +267,10 @@ static void on_heartbeat(struct cy_sub_t* const sub,
 
 // ----------------------------------------  TOPIC HASH  ----------------------------------------
 
-/// Returns CY_SUBJECT_ID_INVALID if the string is not a valid stationary subject-ID form.
+/// Returns CY_SUBJECT_ID_INVALID if the string is not a valid pinned subject-ID form.
 /// Stationary topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
 /// The only requirement to ensure this is that there must be no leading zeros in the number.
-static uint16_t parse_stationary(const char* s)
+static uint16_t parse_pinned(const char* s)
 {
     if ((s == NULL) || (*s != '/')) {
         return CY_SUBJECT_ID_INVALID;
@@ -297,15 +297,15 @@ static uint16_t parse_stationary(const char* s)
 }
 
 /// Topic hash is the cornerstone of the protocol.
-static uint64_t topic_hash(const char* const name, bool* const out_stationary)
+static uint64_t topic_hash(const char* const name, bool* const out_pinned)
 {
-    uint64_t hash = parse_stationary(name);
+    uint64_t hash = parse_pinned(name);
     const bool stat = hash < CY_TOTAL_SUBJECT_COUNT;
     if (!stat) {
         hash = crc64we_string(name);
     }
-    if (out_stationary != NULL) {
-        *out_stationary = stat;
+    if (out_pinned != NULL) {
+        *out_pinned = stat;
     }
     return hash;
 }
@@ -354,7 +354,7 @@ cy_err_t cy_new(struct cy_t* const cy,
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
-    // Register the heartbeat topic and subscribe. This is a stationary topic so no network exchange will take place.
+    // Register the heartbeat topic and subscribe. This is a pinned topic so no network exchange will take place.
     const bool topic_ok = cy_topic_new(cy, &cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
     assert(topic_ok);
     cy->heartbeat_topic.user = heartbeat_topic_user;
@@ -432,7 +432,7 @@ bool cy_topic_new(struct cy_t* const cy, //
     topic->name_len = strlen(name);
     memcpy(topic->name, name, smaller(topic->name_len, CY_TOPIC_NAME_MAX));
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
-    topic->hash = topic_hash(name, &topic->stationary);
+    topic->hash = topic_hash(name, &topic->pinned);
 
     topic->crdt_meta.lamport_clock = 0;
     topic->crdt_meta.owner_uid = 0;
