@@ -44,6 +44,9 @@ extern "C"
 
 typedef int8_t cy_err_t;
 
+struct cy_t;
+struct cy_topic_t;
+
 enum cy_prio_t
 {
     cy_prio_exceptional = 0,

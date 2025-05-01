@@ -1,6 +1,6 @@
 # Copyright (c) Pavel Kirienko
 
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.24)
 project(cy_examples CXX)
 enable_testing()
 

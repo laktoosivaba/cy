@@ -191,7 +191,7 @@ struct heartbeat_t
 static struct heartbeat_t make_heartbeat(const uint64_t uptime_us,
                                          const uint64_t uid,
                                          const struct cy_crdt_meta_t crdt_meta,
-                                         const uint32_t crdt_value,
+                                         const uint16_t crdt_value,
                                          const char* const crdt_name)
 {
     struct heartbeat_t obj = {
@@ -259,8 +259,8 @@ static void on_heartbeat(struct cy_sub_t* const sub,
     assert(payload.size >= (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX));
 
     (void)sub;
-    (void)ts_us;
     (void)tfer;
+    (void)ts_us;
     (void)payload;
     assert(false); // TODO IMPLEMENT
 }
@@ -287,7 +287,7 @@ static uint16_t parse_stationary(const char* s)
         if ((*s == '0') && (out == 0U)) {
             return CY_SUBJECT_ID_INVALID; // Non-canonical name -- leading zero!
         }
-        out = (out * 10U) + (*s - '0');
+        out = (out * 10U) + (uint8_t)(*s - '0');
         s++;
         if (out >= CY_TOTAL_SUBJECT_COUNT) {
             return CY_SUBJECT_ID_INVALID;
@@ -560,6 +560,6 @@ cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_u
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     const cy_err_t res = topic->cy->transport_publish(topic, tx_deadline_us, payload);
-    topic->pub_tfer_id++; // The transfer-ID is always incremented, even if the message is not actually published.
+    topic->pub_tfer_id++; // The transfer-ID is always incremented, even on failure, to signal lost messages.
     return res;
 }
