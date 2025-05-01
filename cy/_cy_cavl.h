@@ -99,10 +99,6 @@ static inline Cavl* cavlFindExtremum(Cavl* const root, const bool maximum)
     return result;
 }
 
-/// Returns i-th node in the tree, where i is the index of the node in the in-order traversal.
-/// Returns NULL if the index is out of bounds. The time complexity is linear.
-static inline Cavl* cavlIndex(Cavl* const root, const size_t index);
-
 // ----------------------------------------     END OF PUBLIC API SECTION      ----------------------------------------
 // ----------------------------------------      POLICE LINE DO NOT CROSS      ----------------------------------------
 
@@ -208,25 +204,6 @@ static inline Cavl* cavlPrivateRetraceOnGrowth(Cavl* const added)
     }
     CAVL_ASSERT(c != NULL);
     return (NULL == p) ? c : NULL;  // New root or nothing.
-}
-
-static inline Cavl* cavlPrivateIndex(Cavl* const node, size_t* current, const size_t target)
-{
-    if (node == NULL)
-    {
-        return NULL;
-    }
-    Cavl* const left = cavlPrivateIndex(node->lr[0], current, target);
-    if (left != NULL)
-    {
-        return left;
-    }
-    if (*current == target)
-    {
-        return node;
-    }
-    ++*current;
-    return cavlPrivateIndex(node->lr[1], current, target);
 }
 
 static inline Cavl* cavlSearch(Cavl** const        root,
@@ -363,12 +340,6 @@ static inline void cavlRemove(Cavl** const root, const Cavl* const node)
             }
         }
     }
-}
-
-static inline Cavl* cavlIndex(Cavl* const root, const size_t index)
-{
-    size_t current = 0U;
-    return cavlPrivateIndex(root, &current, index);
 }
 
 #ifdef __cplusplus

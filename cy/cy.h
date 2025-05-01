@@ -106,7 +106,7 @@ struct cy_topic_t
 {
     struct cy_tree_t index_hash;
     struct cy_tree_t index_subject_id;
-    // TODO: third index by the time of last gossip. Initial time randomized.
+    struct cy_tree_t index_gossip_time;
 
     struct cy_t* cy;
 
@@ -126,6 +126,11 @@ struct cy_topic_t
     uint64_t hash;
 
     uint16_t subject_id;
+
+    /// Updated with the current time when a gossip is either sent or received. Thus, this is the time when the network
+    /// last saw the topic. It allows us to optimally decide which topic to gossip next such that redundant traffic is
+    /// minimized and the time to full topic discovery is minimized.
+    uint64_t last_gossip_us;
 
     /// True if the ID is assigned directly; e.g., "/7509".
     /// Stationary topics must NOT check the discriminator for collisions, to ensure compatibility with old deployments.
@@ -185,7 +190,6 @@ struct cy_t
     cy_transport_subscribe_t   transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
 
-    size_t   heartbeat_gossip_scan_index;
     uint64_t heartbeat_last_us;
 
     /// Topics needed by Cy itself.
@@ -195,7 +199,7 @@ struct cy_t
     /// All topics are indexed both by name and by subject-ID for fast lookups.
     struct cy_tree_t* topics_by_name;
     struct cy_tree_t* topics_by_subject_id;
-    // TODO: third index by the time of last gossip.
+    struct cy_tree_t* topics_by_gossip_time;
 
     /// This is to ensure we don't exhaust the subject-ID space.
     size_t topic_count;
@@ -233,11 +237,11 @@ cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
 /// use cy_topic_find_by_subject_id().
 /// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining like:
 ///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_id));
-cy_err_t cy_notify_discriminator_collision(const struct cy_topic_t* topic);
+cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
-/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation?
+/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation.
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name);
 void cy_topic_destroy(struct cy_topic_t* const topic);
 
