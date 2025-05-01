@@ -376,9 +376,7 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
     cy_err_t res = 0;
     if ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us)
     {
-        // TODO: linear traversal at each iteration is stupid; need a better solution.
-        // Cache/invalidate tree nodes? Build a new index just for iterative gossip? Adjust publication order such that
-        // the least recently seen topics are published first? Probably a new index for that is not a bad idea.
+        // TODO: third index tree by the last gossip time, updated both when gossiping and receiving a gossip.
         const struct cy_tree_t* tre = cavlIndex(cy->topics_by_name, cy->heartbeat_gossip_scan_index);
         if (tre == NULL)
         {
@@ -399,7 +397,7 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
 cy_err_t cy_notify_discriminator_collision(const struct cy_topic_t* topic)
 {
     assert(topic != NULL);
-    /// TODO: rate limiting! Record the last collision time and rate limit at 1 Hz per topic.
+    /// TODO: rate limiting! Check the time of last gossip; if less than 100 ms ago then don't send.
     return gossip(topic->cy, topic->crdt_meta, topic->subject_id, topic->name);
 }
 

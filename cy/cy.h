@@ -106,6 +106,7 @@ struct cy_topic_t
 {
     struct cy_tree_t index_hash;
     struct cy_tree_t index_subject_id;
+    // TODO: third index by the time of last gossip. Initial time randomized.
 
     struct cy_t* cy;
 
@@ -194,6 +195,7 @@ struct cy_t
     /// All topics are indexed both by name and by subject-ID for fast lookups.
     struct cy_tree_t* topics_by_name;
     struct cy_tree_t* topics_by_subject_id;
+    // TODO: third index by the time of last gossip.
 
     /// This is to ensure we don't exhaust the subject-ID space.
     size_t topic_count;
