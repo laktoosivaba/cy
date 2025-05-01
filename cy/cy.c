@@ -276,16 +276,13 @@ static uint16_t parse_pinned(const char* s)
         return CY_SUBJECT_ID_INVALID;
     }
     s++;
-    if (*s == '\0') {
+    if ((*s == '\0') || (*s == '0')) { // Leading zeroes not allowed; only canonical form is accepted.
         return CY_SUBJECT_ID_INVALID;
     }
     uint32_t out = 0U;
     while (*s != '\0') {
         if ((*s < '0') || (*s > '9')) {
             return CY_SUBJECT_ID_INVALID;
-        }
-        if ((*s == '0') && (out == 0U)) {
-            return CY_SUBJECT_ID_INVALID; // Non-canonical name -- leading zero!
         }
         out = (out * 10U) + (uint8_t)(*s - '0');
         s++;
