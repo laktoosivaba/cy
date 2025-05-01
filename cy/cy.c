@@ -17,57 +17,7 @@
 #define HEARTBEAT_PUB_PERIOD_us CY_UPDATE_INTERVAL_MIN_us
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
 
-// ----------------------------------------  CRC-16-CCITT-FALSE  ----------------------------------------
-// This CRC is used for computing the short topic name hash that is sent along with each transfer on that topic.
-// This is to prevent data misinterpretation in case of an allocation collision; the CRDT is able to detect and
-// resolve such collisions automatically, but it takes a few network transactions to find a new consensus;
-// while the convergence is in progress, the topic CRC will protect the network from data misinterpretation.
-
-#define CRC16CCITT_FALSE_INITIAL UINT16_MAX
-#define CRC16CCITT_FALSE_RESIDUE 0
-
-// The same CRC function is used in all lib*ard libraries. Hopefully the compiler will merge all tables.
-// This hash is actually computed infrequently, so it might make sense to replace the table with manual computation.
-static const uint16_t crc16_ccitt_false_table[256] = {
-    0x0000U, 0x1021U, 0x2042U, 0x3063U, 0x4084U, 0x50A5U, 0x60C6U, 0x70E7U, 0x8108U, 0x9129U, 0xA14AU, 0xB16BU, 0xC18CU,
-    0xD1ADU, 0xE1CEU, 0xF1EFU, 0x1231U, 0x0210U, 0x3273U, 0x2252U, 0x52B5U, 0x4294U, 0x72F7U, 0x62D6U, 0x9339U, 0x8318U,
-    0xB37BU, 0xA35AU, 0xD3BDU, 0xC39CU, 0xF3FFU, 0xE3DEU, 0x2462U, 0x3443U, 0x0420U, 0x1401U, 0x64E6U, 0x74C7U, 0x44A4U,
-    0x5485U, 0xA56AU, 0xB54BU, 0x8528U, 0x9509U, 0xE5EEU, 0xF5CFU, 0xC5ACU, 0xD58DU, 0x3653U, 0x2672U, 0x1611U, 0x0630U,
-    0x76D7U, 0x66F6U, 0x5695U, 0x46B4U, 0xB75BU, 0xA77AU, 0x9719U, 0x8738U, 0xF7DFU, 0xE7FEU, 0xD79DU, 0xC7BCU, 0x48C4U,
-    0x58E5U, 0x6886U, 0x78A7U, 0x0840U, 0x1861U, 0x2802U, 0x3823U, 0xC9CCU, 0xD9EDU, 0xE98EU, 0xF9AFU, 0x8948U, 0x9969U,
-    0xA90AU, 0xB92BU, 0x5AF5U, 0x4AD4U, 0x7AB7U, 0x6A96U, 0x1A71U, 0x0A50U, 0x3A33U, 0x2A12U, 0xDBFDU, 0xCBDCU, 0xFBBFU,
-    0xEB9EU, 0x9B79U, 0x8B58U, 0xBB3BU, 0xAB1AU, 0x6CA6U, 0x7C87U, 0x4CE4U, 0x5CC5U, 0x2C22U, 0x3C03U, 0x0C60U, 0x1C41U,
-    0xEDAEU, 0xFD8FU, 0xCDECU, 0xDDCDU, 0xAD2AU, 0xBD0BU, 0x8D68U, 0x9D49U, 0x7E97U, 0x6EB6U, 0x5ED5U, 0x4EF4U, 0x3E13U,
-    0x2E32U, 0x1E51U, 0x0E70U, 0xFF9FU, 0xEFBEU, 0xDFDDU, 0xCFFCU, 0xBF1BU, 0xAF3AU, 0x9F59U, 0x8F78U, 0x9188U, 0x81A9U,
-    0xB1CAU, 0xA1EBU, 0xD10CU, 0xC12DU, 0xF14EU, 0xE16FU, 0x1080U, 0x00A1U, 0x30C2U, 0x20E3U, 0x5004U, 0x4025U, 0x7046U,
-    0x6067U, 0x83B9U, 0x9398U, 0xA3FBU, 0xB3DAU, 0xC33DU, 0xD31CU, 0xE37FU, 0xF35EU, 0x02B1U, 0x1290U, 0x22F3U, 0x32D2U,
-    0x4235U, 0x5214U, 0x6277U, 0x7256U, 0xB5EAU, 0xA5CBU, 0x95A8U, 0x8589U, 0xF56EU, 0xE54FU, 0xD52CU, 0xC50DU, 0x34E2U,
-    0x24C3U, 0x14A0U, 0x0481U, 0x7466U, 0x6447U, 0x5424U, 0x4405U, 0xA7DBU, 0xB7FAU, 0x8799U, 0x97B8U, 0xE75FU, 0xF77EU,
-    0xC71DU, 0xD73CU, 0x26D3U, 0x36F2U, 0x0691U, 0x16B0U, 0x6657U, 0x7676U, 0x4615U, 0x5634U, 0xD94CU, 0xC96DU, 0xF90EU,
-    0xE92FU, 0x99C8U, 0x89E9U, 0xB98AU, 0xA9ABU, 0x5844U, 0x4865U, 0x7806U, 0x6827U, 0x18C0U, 0x08E1U, 0x3882U, 0x28A3U,
-    0xCB7DU, 0xDB5CU, 0xEB3FU, 0xFB1EU, 0x8BF9U, 0x9BD8U, 0xABBBU, 0xBB9AU, 0x4A75U, 0x5A54U, 0x6A37U, 0x7A16U, 0x0AF1U,
-    0x1AD0U, 0x2AB3U, 0x3A92U, 0xFD2EU, 0xED0FU, 0xDD6CU, 0xCD4DU, 0xBDAAU, 0xAD8BU, 0x9DE8U, 0x8DC9U, 0x7C26U, 0x6C07U,
-    0x5C64U, 0x4C45U, 0x3CA2U, 0x2C83U, 0x1CE0U, 0x0CC1U, 0xEF1FU, 0xFF3EU, 0xCF5DU, 0xDF7CU, 0xAF9BU, 0xBFBAU, 0x8FD9U,
-    0x9FF8U, 0x6E17U, 0x7E36U, 0x4E55U, 0x5E74U, 0x2E93U, 0x3EB2U, 0x0ED1U, 0x1EF0U,
-};
-
-static inline uint16_t crc16ccitt_false_string(const char* str)
-{
-    assert(str != NULL);
-    uint16_t crc = CRC16CCITT_FALSE_INITIAL;
-    while (*str != '\0')
-    {
-        crc = (uint16_t) ((uint16_t) (crc << BYTE_BITS) ^
-                          crc16_ccitt_false_table[(uint16_t) ((uint16_t) (crc >> BYTE_BITS) ^ (uint16_t) *str) &
-                                                  BYTE_MAX]);
-        ++str;
-    }
-    return crc;
-}
-
 // ----------------------------------------  CRC-64/WE  ----------------------------------------
-// The large 64-bit hash is used to replace topic names when indexing them by name.
-// The hash is used as the search key in the AVL tree.
 
 #define CRC64WE_INITIAL UINT64_MAX
 
@@ -138,7 +88,45 @@ static inline uint64_t crc64we_string(const char* str)
     return crc;
 }
 
-// ----------------------------------------  INTERNALS  ----------------------------------------
+// ----------------------------------------  AVL TREE UTILITIES  ----------------------------------------
+
+static int8_t cavl_predicate_topic_name(void* const user_reference, const struct cy_tree_t* const node)
+{
+    assert((user_reference != NULL) && (node != NULL));
+    const uint64_t                 outer = *(uint64_t*) user_reference;
+    const struct cy_topic_t* const inner =
+        (const struct cy_topic_t*) (((const char*) node) - offsetof(struct cy_topic_t, index_name));
+    if (outer == inner->hash)
+    {
+        return 0;
+    }
+    return (outer >= inner->hash) ? +1 : -1;
+}
+
+static int8_t cavl_predicate_topic_subject_id(void* const user_reference, const struct cy_tree_t* const node)
+{
+    assert((user_reference != NULL) && (node != NULL));
+    const uint16_t                 outer = *(uint16_t*) user_reference;
+    const struct cy_topic_t* const inner =
+        (const struct cy_topic_t*) (((const char*) node) - offsetof(struct cy_topic_t, index_subject_id));
+    if (outer == inner->subject_id)
+    {
+        return 0;
+    }
+    return (outer >= inner->subject_id) ? +1 : -1;
+}
+
+static struct cy_tree_t* cavl_factory_topic_name(void* const user_reference)
+{
+    return &((struct cy_topic_t*) user_reference)->index_name;
+}
+
+static struct cy_tree_t* cavl_factory_topic_subject_id(void* const user_reference)
+{
+    return &((struct cy_topic_t*) user_reference)->index_subject_id;
+}
+
+// ----------------------------------------  HEARTBEAT IO  ----------------------------------------
 
 static inline size_t smaller(const size_t a, const size_t b)
 {
@@ -204,10 +192,10 @@ static cy_err_t gossip(struct cy_t*                cy,
     assert(msg_size <= sizeof(msg));
     assert(msg.topic_gossip.name_length <= CY_TOPIC_NAME_MAX);
     // TODO: proper serialization; this only works on little-endian machines.
-    const cy_err_t res = cy->transport_publish(cy,
-                                               &cy->heartbeat_topic,
+    const cy_err_t res = cy->transport_publish(&cy->heartbeat_topic,
                                                now + HEARTBEAT_PUB_TIMEOUT_us,
                                                (struct cy_payload_t) {.data = &msg, .size = msg_size});
+    cy->heartbeat_topic.pub_tfer_id++;
     if (res >= 0)
     {
         cy->heartbeat_last_us = now;
@@ -215,8 +203,25 @@ static cy_err_t gossip(struct cy_t*                cy,
     return res;
 }
 
-/// Returns CY_SUBJECT_ID_INVALID if parsing fails.
-static uint16_t parse_fixed_subject_id(const char* s)
+static void on_heartbeat(struct cy_sub_t* const        sub,
+                         const uint64_t                ts_us,
+                         const struct cy_tfer_meta_t   tfer,
+                         const struct cy_payload_mut_t payload)
+{
+    assert(sub != NULL);
+    assert(payload.data != NULL);
+    assert(payload.size <= sizeof(struct heartbeat_t));
+    assert(payload.size >= (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX));
+
+    // TODO IMPLEMENT
+}
+
+// ----------------------------------------  OTHER INTERNALS  ----------------------------------------
+
+/// Returns CY_SUBJECT_ID_INVALID if the string is not a valid stationary subject-ID form.
+/// Stationary topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
+/// The only requirement to ensure this is that there must be no leading zeros in the number.
+static uint16_t parse_stationary(const char* s)
 {
     if ((s == NULL) || (*s != '/'))
     {
@@ -234,6 +239,10 @@ static uint16_t parse_fixed_subject_id(const char* s)
         {
             return CY_SUBJECT_ID_INVALID;
         }
+        if ((*s == '0') && (out == 0U))
+        {
+            return CY_SUBJECT_ID_INVALID;  // Non-canonical name -- leading zero!
+        }
         out = (out * 10U) + (*s - '0');
         s++;
         if (out >= CY_TOTAL_SUBJECT_COUNT)
@@ -244,79 +253,20 @@ static uint16_t parse_fixed_subject_id(const char* s)
     return (uint16_t) out;
 }
 
-static bool bitmap_get(const uint8_t* const map, const size_t index)
+/// Topic hash is the cornerstone of the protocol.
+static uint64_t topic_hash(const char* const name, bool* const out_stationary)
 {
-    return ((uint8_t) (map[index / BYTE_BITS] >> (index % BYTE_BITS)) & 1U) != 0;
-}
-
-static void bitmap_set(uint8_t* const map, const size_t index)
-{
-    assert(map != NULL);
-    map[index / BYTE_BITS] |= (uint8_t) (1U << (index % BYTE_BITS));
-}
-
-// todo fixme: do not use the occupancy map.
-static uint16_t allocate_subject_id(struct cy_t*      cy,
-                                    const uint8_t     subject_occupancy_mask[CY_SUBJECT_OCCUPANCY_MASK_SIZE_BYTES],
-                                    const char* const topic_name)
-{
-    // static const uint16_t lim        = CY_ALLOC_SUBJECT_COUNT;
-    // uint16_t              iterations = 0U;
-    // uint16_t              val        = crc16ccitt_false_string(topic_name) % lim;
-    // while (bitmap_get(subject_occupancy_mask, val))
-    // {
-    //     val = (val + 1U) % lim;
-    //     iterations++;
-    //     if (iterations > lim)
-    //     {
-    //         return CY_SUBJECT_ID_INVALID;
-    //     }
-    // }
-    // assert(val < lim);
-    // bitmap_set((uint8_t*) subject_occupancy_mask, val);
-    // return val;
-    return cy->rand16(cy) % CY_ALLOC_SUBJECT_COUNT;
-}
-
-static int8_t cavl_predicate_topic_name(void* const user_reference, const struct cy_tree_t* const node)
-{
-    assert((user_reference != NULL) && (node != NULL));
-    const struct cy_topic_t* const outer = (const struct cy_topic_t*) user_reference;
-    const struct cy_topic_t* const inner =
-        (const struct cy_topic_t*) (((const char*) node) - offsetof(struct cy_topic_t, index_name));
-    if (outer->name_hash == inner->name_hash)
+    uint64_t   hash = parse_stationary(name);
+    const bool stat = hash < CY_TOTAL_SUBJECT_COUNT;
+    if (!stat)
     {
-        return 0;
+        hash = crc64we_string(name);
     }
-    return (outer->name_hash >= inner->name_hash) ? +1 : -1;
-}
-
-static int8_t cavl_predicate_topic_subject_id(void* const user_reference, const struct cy_tree_t* const node)
-{
-    assert((user_reference != NULL) && (node != NULL));
-    const struct cy_topic_t* const outer = (const struct cy_topic_t*) user_reference;
-    const struct cy_topic_t* const inner =
-        (const struct cy_topic_t*) (((const char*) node) - offsetof(struct cy_topic_t, index_subject_id));
-    if (outer->subject_id == inner->subject_id)
+    if (out_stationary != NULL)
     {
-        return 0;
+        *out_stationary = stat;
     }
-    return (outer->subject_id >= inner->subject_id) ? +1 : -1;
-}
-
-static struct cy_tree_t* cavl_factory_topic_name(void* const user_reference)
-{
-    return &((struct cy_topic_t*) user_reference)->index_name;
-}
-
-static struct cy_tree_t* cavl_factory_topic_subject_id(void* const user_reference)
-{
-    return &((struct cy_topic_t*) user_reference)->index_subject_id;
-}
-
-static void on_heartbeat(const struct cy_sub_event_t* const evt)
-{
-    // TODO FIXME IMPLEMENT
+    return hash;
 }
 
 // ----------------------------------------  PUBLIC API  ----------------------------------------
@@ -325,7 +275,6 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
                 const cy_now_t                   now,
-                const cy_rand16_t                rand16,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
@@ -335,7 +284,6 @@ cy_err_t cy_new(struct cy_t* const               cy,
     assert(cy != NULL);
     assert(uid != 0);
     assert(now != NULL);
-    assert(rand16 != NULL);
     assert(publish != NULL);
     assert(subscribe != NULL);
     assert(unsubscribe != NULL);
@@ -356,33 +304,31 @@ cy_err_t cy_new(struct cy_t* const               cy,
         cy->namespace_[0] = '~';
         cy->namespace_[1] = '\0';
     }
-
     cy->user                  = user;
     cy->now                   = now;
-    cy->rand16                = rand16;
     cy->transport_publish     = publish;
     cy->transport_subscribe   = subscribe;
     cy->transport_unsubscribe = unsubscribe;
     cy->topics_by_name        = NULL;
     cy->topics_by_subject_id  = NULL;
+    cy->topic_count           = 0;
 
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
-    // Register the heartbeat topic and subscribe to it. This is a fixed topic so no network exchange will take place.
+    // Register the heartbeat topic and subscribe. This is a stationary topic so no network exchange will take place.
     const bool topic_ok = cy_topic_new(cy, &cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
     assert(topic_ok);
     cy->heartbeat_topic.user = heartbeat_topic_user;
 
-    const cy_err_t res = cy_subscribe(cy,
-                                      &cy->heartbeat_topic,
+    const cy_err_t res = cy_subscribe(&cy->heartbeat_topic,
                                       &cy->heartbeat_sub,
                                       HEARTBEAT_EXTENT,
                                       CY_TFER_ID_TIMEOUT_DEFAULT_us,
                                       &on_heartbeat);
     if (res < 0)
     {
-        cy_topic_destroy(cy, &cy->heartbeat_topic);
+        cy_topic_destroy(&cy->heartbeat_topic);
     }
     return res;
 }
@@ -392,38 +338,22 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
 {
     assert(cy != NULL);
 
-    cy_err_t res = 0;
     if (evt != NULL)
     {
         assert(evt->topic != NULL);
-        // Accept the data only if the topic CRC matches our expectation. Fixed topics do not require CRC checks
-        // for compatibility with old networks that don't use named topics.
-        if (evt->topic->fixed || (evt->topic->name_crc == evt->topic_crc))
+        assert(evt->topic->cy == cy);
+        // The transport layer is responsible for comparing the topic discriminator.
+        // If we got something here, the discriminator must be correct.
+        struct cy_sub_t* sub = evt->topic->sub_list;
+        while (sub != NULL)
         {
-            struct cy_sub_t* sub = evt->topic->sub_list;
-            while (sub != NULL)
+            assert(sub->topic == evt->topic);
+            struct cy_sub_t* const next = sub->next;  // In case the callback deletes this subscription.
+            if (sub->callback != NULL)
             {
-                struct cy_sub_t* const next = sub->next;  // In case the callback deletes this subscription.
-                if (sub->callback != NULL)
-                {
-                    sub->callback(&(struct cy_sub_event_t) {
-                        .cy      = cy,
-                        .topic   = evt->topic,
-                        .sub     = sub,
-                        .ts_us   = evt->ts_us,
-                        .tfer    = evt->tfer,
-                        .payload = evt->payload,
-                    });
-                }
-                sub = next;
+                sub->callback(sub, evt->ts_us, evt->tfer, evt->payload);
             }
-        }
-
-        // Check for a bona fide allocation collision. If a collision is found,
-        // announce the current allocation to trigger repair consensus search on the network.
-        if (!evt->topic->fixed && (evt->topic->name_crc != evt->topic_crc))
-        {
-            res = gossip(cy, evt->topic->crdt_meta, evt->topic->subject_id, evt->topic->name);
+            sub = next;
         }
     }
 
@@ -431,7 +361,8 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
     /// or our own proposal, or as a corrective entry if a conflict is found.
     /// If that happened, we don't want to transmit another heartbeat immediately to regulate the traffic.
     /// This is why we check for the time here at the end, after the incoming transfer is handled.
-    if ((res >= 0) && ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us))
+    cy_err_t res = 0;
+    if ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us)
     {
         // TODO: linear traversal at each iteration is stupid; need a better solution.
         // Cache/invalidate tree nodes? Build a new index just for iterative gossip? Adjust publication order such that
@@ -453,34 +384,39 @@ cy_err_t cy_update(struct cy_t* const              cy,  //
     return res;
 }
 
+cy_err_t cy_notify_discriminator_mismatch(const struct cy_topic_t* topic)
+{
+    assert(topic != NULL);
+    return gossip(topic->cy, topic->crdt_meta, topic->subject_id, topic->name);
+}
+
 bool cy_topic_new(struct cy_t* const       cy,  //
                   struct cy_topic_t* const topic,
-                  const char* const        topic_name)
+                  const char* const        name)
 {
     assert(cy != NULL);
     assert(topic != NULL);
-    assert(topic_name != NULL);
+    assert(name != NULL);
     memset(topic, 0, sizeof(*topic));
+    topic->cy = cy;
 
-    // TODO FIXME: prefix the namespace unless the topic name starts with "/".
-    // TODO FIXME: expand ~ to "/vvvv/pppp/iiiiiiii/"
-    // TODO FIXME: canonicalize the topic name (repeated/trailing slash, strip whitespace, etc.).
-    topic->name_len = strlen(topic_name);
-    memcpy(topic->name, topic_name, smaller(topic->name_len, CY_TOPIC_NAME_MAX));
+    // TODO: prefix the namespace unless the topic name starts with "/".
+    // TODO: expand ~ to "/vvvv/pppp/iiiiiiii/"
+    // TODO: canonicalize the topic name (repeated/trailing slash, strip whitespace, etc.).
+    topic->name_len = strlen(name);
+    memcpy(topic->name, name, smaller(topic->name_len, CY_TOPIC_NAME_MAX));
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
-    topic->name_hash               = crc64we_string(topic_name);
-    topic->name_crc                = crc16ccitt_false_string(topic_name);
+    topic->hash                    = topic_hash(name, &topic->stationary);
 
-    topic->subject_id = parse_fixed_subject_id(topic_name);
-    if (topic->subject_id < CY_TOTAL_SUBJECT_COUNT)
+    topic->subject_id = (uint16_t) (topic->hash % CY_ALLOC_SUBJECT_COUNT);
+    while (cy_topic_find_by_subject_id(topic->cy, topic->subject_id) != NULL)
     {
-        topic->fixed = true;
+        topic->subject_id = (topic->subject_id + 1U) % CY_ALLOC_SUBJECT_COUNT;
     }
-    else
-    {
-        topic->fixed      = false;
-        topic->subject_id = CY_SUBJECT_ID_INVALID;  // Normalize invalid values: only 0xFFFF
-    }
+    assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
+
+    topic->crdt_meta.lamport_clock = 0;
+    topic->crdt_meta.owner_uid     = 0;
 
     topic->user         = NULL;
     topic->pub_tfer_id  = 0;
@@ -488,12 +424,15 @@ bool cy_topic_new(struct cy_t* const       cy,  //
     topic->sub_list     = NULL;
     topic->sub_active   = false;
 
+    bool ok = (topic->name_len > 0) && (topic->name_len <= CY_TOPIC_NAME_MAX) &&  //
+              (cy->topic_count < CY_ALLOC_SUBJECT_COUNT);
+
     // Insert the new topic into the name index tree.
-    bool ok = (topic->name_len > 0) && (topic->name_len <= CY_TOPIC_NAME_MAX);
     if (ok)
     {
+        // TODO FIXME need a different CAVL factory.
         const struct cy_tree_t* const res_tree = cavlSearch(&cy->topics_by_name,  //
-                                                            topic,
+                                                            &topic->hash,
                                                             &cavl_predicate_topic_name,
                                                             &cavl_factory_topic_name);
         assert(res_tree != NULL);
@@ -501,38 +440,66 @@ bool cy_topic_new(struct cy_t* const       cy,  //
             (const struct cy_topic_t*) (((const char*) res_tree) - offsetof(struct cy_topic_t, index_name));
         ok = res_topic == topic;
     }
-    // The subject-ID index tree contains only topics with valid dynamic subject-IDs (not the fixed ones).
-    // This is because if the user insists on using a fixed subject-ID, then they are responsible for the allocation
-    // and we don't care if there's a collision or armageddon -- just blame the user.
 
-    // CAUTION: this will need to be updated if we allow the user to restore old allocations at initialization!
+    // TODO Insert the topic into the subject index.
 
-    // Ask the network if anyone has a valid allocation for this topic.
-    if (ok && (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT))
-    {  // No problem if it fails -- we can always try again later on.
-        assert(topic->subject_id == CY_SUBJECT_ID_INVALID);
-        (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
+    if (ok)
+    {
+        topic->crdt_meta.lamport_clock++;
+        topic->crdt_meta.owner_uid = topic->cy->uid;
+        (void) gossip(topic->cy, topic->crdt_meta, topic->subject_id, topic->name);
     }
-
+    cy->topic_count += ok ? 1 : 0;
     return ok;
 }
 
-cy_err_t cy_subscribe(struct cy_t* const       cy,
-                      struct cy_topic_t* const topic,
+struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name)
+{
+    assert(cy != NULL);
+    assert(name != NULL);
+    uint64_t                hash = crc64we_string(name);
+    struct cy_tree_t* const t    = cavlSearch(&cy->topics_by_name, &hash, &cavl_predicate_topic_name, NULL);
+    if (t == NULL)
+    {
+        return NULL;
+    }
+    struct cy_topic_t* topic = (struct cy_topic_t*) (((char*) t) - offsetof(struct cy_topic_t, index_name));
+    assert(topic->hash == hash);
+    assert(topic->cy == cy);
+    return topic;
+}
+
+struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id)
+{
+    assert(cy != NULL);
+    struct cy_tree_t* const t =
+        cavlSearch(&cy->topics_by_subject_id, &subject_id, &cavl_predicate_topic_subject_id, NULL);
+    if (t == NULL)
+    {
+        return NULL;
+    }
+    struct cy_topic_t* topic = (struct cy_topic_t*) (((char*) t) - offsetof(struct cy_topic_t, index_subject_id));
+    assert(topic->subject_id == subject_id);
+    assert(topic->cy == cy);
+    return topic;
+}
+
+cy_err_t cy_subscribe(struct cy_topic_t* const topic,
                       struct cy_sub_t* const   sub,
                       const size_t             extent,
                       const uint64_t           tfer_id_timeout_us,
-                      void (*const callback)(const struct cy_sub_event_t*))
+                      const cy_sub_callback_t  callback)
 {
     assert(topic != NULL);
     assert(sub != NULL);
+    assert((topic->name_len > 0) && (topic->name[0] != '\0'));
+    assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     topic->sub_tfer_id_timeout_us = tfer_id_timeout_us;
     topic->sub_extent             = extent;
-
     memset(sub, 0, sizeof(*sub));
     sub->next     = NULL;
+    sub->topic    = topic;
     sub->callback = callback;  // May be NULL, we don't check at this stage (we do check later, safety first).
-
     // Append the list.
     struct cy_sub_t* last = topic->sub_list;
     while ((last != NULL) && (last->next != NULL))
@@ -547,53 +514,23 @@ cy_err_t cy_subscribe(struct cy_t* const       cy,
     {
         last->next = sub;
     }
-
-    if (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT)  // This branch will not be taken for fixed topics.
-    {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
-        // The network may reject it; we will find out later.
-        topic->crdt_meta.lamport_clock++;
-        topic->crdt_meta.owner_uid = cy->uid;
-        topic->subject_id          = allocate_subject_id(cy, cy->subject_occupancy_mask, topic->name);
-        // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
-        (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
-    }
-
+    // Ensure the transport layer subscription is active.
     cy_err_t err = 0;
     if (!topic->sub_active)
     {
-        // Remember that this is a tentative allocation. It may be incorrect, in which case we will adjust it
-        // and resubscribe when the corrective CRDT gossip arrives.
-        err               = cy->transport_subscribe(cy, topic);
+        err               = topic->cy->transport_subscribe(topic);
         topic->sub_active = err >= 0;
     }
-
     return err;
 }
 
-cy_err_t cy_publish(struct cy_t* const        cy,
-                    struct cy_topic_t* const  topic,
-                    const uint64_t            tx_deadline_us,
-                    const struct cy_payload_t payload)
+cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload)
 {
-    assert(cy != NULL);
     assert(topic != NULL);
     assert((payload.data != NULL) || (payload.size == 0));
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
-    cy_err_t res = 0;
-    // Publishers are allowed to self-allocate as well (this used to be forbidden, only subscribers did that).
-    // We are protected against data misinterpretation caused by topic collisions by the topic CRC.
-    // A self-allocating publisher will never have to drop user's data, because it always can publish!
-    // FIXME code duplication
-    if (topic->subject_id >= CY_TOTAL_SUBJECT_COUNT)  // This branch will not be taken for fixed topics.
-    {  // The subject-ID is not known yet, so we need to propose an allocation to the network.
-        // The network may reject it; we will find out later.
-        topic->crdt_meta.lamport_clock++;
-        topic->crdt_meta.owner_uid = cy->uid;
-        topic->subject_id          = allocate_subject_id(cy, cy->subject_occupancy_mask, topic->name);
-        // Gossip errors are ignored because eventually gossip will work. We accept our own proposal anyway.
-        (void) gossip(cy, topic->crdt_meta, topic->subject_id, topic->name);
-    }
-    res = cy->transport_publish(cy, topic, tx_deadline_us, payload);
+    assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
+    const cy_err_t res = topic->cy->transport_publish(topic, tx_deadline_us, payload);
     topic->pub_tfer_id++;  // The transfer-ID is always incremented, even if the message is not actually published.
     return res;
 }

@@ -1,7 +1,6 @@
 # The vendor-ID (VID) space is managed by the OpenCyphal maintainers.
 # A vendor needs to submit a request for a new Vendor ID via https://forum.opencyphal.org.
-# For experimentation purposes, a dedicated shared VID is defined here; while it is allowed to use it for any purpose,
-# including in production, doing so is not recommended to avoid conflicts.
+# For experimental systems and examples, a dedicated VENDOR_ID_PUBLIC is defined here, which anyone can use.
 # Since the set of vendor-ID values is a finite resource, the OpenCyphal team reserves the right to revoke an
 # allocated vendor-ID if doing so is believed to benefit the ecosystem (e.g., if the vendor has ceased to exist).
 #
@@ -24,8 +23,19 @@ uint16 vendor_id    # Every vendor obtains their own unique VID upon request fro
 
 # Specific vendor-ID allocations follow.
 
-uint16 VENDOR_ID_INVALID      = 0   # A reserved value. Must not be used.
-uint16 VENDOR_ID_EXPERIMENTAL = 1   # Everyone is free to use this vendor-ID for arbitrary purposes. Use random PIDs.
-uint16 VENDOR_ID_OPENCYPHAL   = 2   # Reserved for the OpenCyphal project.
+uint16 VENDOR_ID_INVALID        = 0     # A reserved value. Must not be used.
+uint16 VENDOR_ID_OPENCYPHAL     = 1     # The OpenCyphal project.
+
+uint16 VENDOR_ID_PUBLIC = 0xFFFF
+# Everyone is free to use this vendor-ID for arbitrary purposes, such as experimental systems, examples, etc.
+# It is possible to use it in production systems as well, but it is not recommended to avoid conflicts.
+#
+# There is no central management of PID and IID within this vendor; instead, one must generate a random
+# 48-bit number to populate the PID and IID. For example:
+#
+#   >>> import random
+#   >>> hex((0xFFFF<<48) | random.getrandbits(48))
+#
+# Under this random assignment regime, the collision probability given 1 million UIDs is ~0.18%.
 
 @sealed
