@@ -3,8 +3,8 @@
 #pragma once
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -47,39 +47,39 @@ typedef int8_t cy_err_t;
 enum cy_prio_t
 {
     cy_prio_exceptional = 0,
-    cy_prio_immediate   = 1,
-    cy_prio_fast        = 2,
-    cy_prio_high        = 3,
-    cy_prio_nominal     = 4,
-    cy_prio_low         = 5,
-    cy_prio_slow        = 6,
-    cy_prio_optional    = 7,
+    cy_prio_immediate = 1,
+    cy_prio_fast = 2,
+    cy_prio_high = 3,
+    cy_prio_nominal = 4,
+    cy_prio_low = 5,
+    cy_prio_slow = 6,
+    cy_prio_optional = 7,
 };
 
 struct cy_payload_t
 {
-    size_t      size;
+    size_t size;
     const void* data;
 };
 
 struct cy_payload_mut_t
 {
     size_t size;
-    void*  data;
+    void* data;
 };
 
 struct cy_tree_t
 {
     struct cy_tree_t* up;
     struct cy_tree_t* lr[2];
-    int8_t            bf;
+    int8_t bf;
 };
 
 struct cy_tfer_meta_t
 {
     enum cy_prio_t priority;
-    uint16_t       remote_node_id;
-    uint64_t       tfer_id;
+    uint16_t remote_node_id;
+    uint64_t tfer_id;
 };
 
 /// Returns the current monotonic time in microseconds.
@@ -98,8 +98,8 @@ typedef cy_err_t (*cy_transport_unsubscribe_t)(struct cy_topic_t*);
 /// Internal use only.
 struct cy_crdt_meta_t
 {
-    uint64_t owner_uid;      ///< Zero is not a valid UID.
-    uint32_t lamport_clock;  ///< Starts at zero for an uninitialized entry.
+    uint64_t owner_uid;     ///< Zero is not a valid UID.
+    uint32_t lamport_clock; ///< Starts at zero for an uninitialized entry.
 };
 
 struct cy_topic_t
@@ -112,7 +112,7 @@ struct cy_topic_t
 
     /// The name is always null-terminated. We keep the size for convenience as well.
     size_t name_len;
-    char   name[CY_TOPIC_NAME_MAX + 1];
+    char name[CY_TOPIC_NAME_MAX + 1];
     /// Assuming we have 1000 topics, the probability of a topic name hash collision is:
     /// >>> from decimal import Decimal
     /// >>> n = 1000
@@ -127,14 +127,15 @@ struct cy_topic_t
 
     uint16_t subject_id;
 
-    /// Updated with the current time when a gossip is either sent or received. Thus, this is the time when the network
-    /// last saw the topic. It allows us to optimally decide which topic to gossip next such that redundant traffic is
-    /// minimized and the time to full topic discovery is minimized.
+    /// Updated with the current time when a gossip is either sent or received. Thus, this is the time when the
+    /// network last saw the topic. It allows us to optimally decide which topic to gossip next such that redundant
+    /// traffic is minimized and the time to full topic discovery is minimized.
     uint64_t last_gossip_us;
 
     /// True if the ID is assigned directly; e.g., "/7509".
-    /// Stationary topics must NOT check the discriminator for collisions, to ensure compatibility with old deployments.
-    /// Valid discriminator must still be populated for outgoing transfers, though, for future compatibility.
+    /// Stationary topics must NOT check the discriminator for collisions, to ensure compatibility with old
+    /// deployments. Valid discriminator must still be populated for outgoing transfers, though, for future
+    /// compatibility.
     bool stationary;
 
     struct cy_crdt_meta_t crdt_meta;
@@ -145,24 +146,24 @@ struct cy_topic_t
     /// Only used if the application publishes data on this topic.
     /// Hint: if the application needs to detect if a topic is published to, check tfer_id>0.
     /// The priority can be adjusted as needed by the user.
-    uint64_t       pub_tfer_id;
+    uint64_t pub_tfer_id;
     enum cy_prio_t pub_priority;
 
     /// Only used if the application subscribes on this topic.
     /// Hint: if the application needs to detect if a topic is subscribed to, check sub_list!=NULL.
     struct cy_sub_t* sub_list;
-    uint64_t         sub_tfer_id_timeout_us;
-    size_t           sub_extent;
-    bool             sub_active;
+    uint64_t sub_tfer_id_timeout_us;
+    size_t sub_extent;
+    bool sub_active;
 };
 
 typedef void (*cy_sub_callback_t)(struct cy_sub_t*, uint64_t, struct cy_tfer_meta_t, struct cy_payload_mut_t);
 struct cy_sub_t
 {
-    struct cy_sub_t*   next;
+    struct cy_sub_t* next;
     struct cy_topic_t* topic;
-    cy_sub_callback_t  callback;
-    void*              user;
+    cy_sub_callback_t callback;
+    void* user;
 };
 
 struct cy_t
@@ -180,21 +181,21 @@ struct cy_t
 
     /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
     size_t namespace_len;
-    char   namespace_[CY_NAMESPACE_NAME_MAX + 1];
+    char namespace_[CY_NAMESPACE_NAME_MAX + 1];
 
     cy_now_t now;
 
     /// Transport layer interface functions.
     /// These can be underpinned by libcanard, libudpard, libserard, or any other transport library.
-    cy_transport_publish_t     transport_publish;
-    cy_transport_subscribe_t   transport_subscribe;
+    cy_transport_publish_t transport_publish;
+    cy_transport_subscribe_t transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
 
     uint64_t heartbeat_last_us;
 
     /// Topics needed by Cy itself.
     struct cy_topic_t heartbeat_topic;
-    struct cy_sub_t   heartbeat_sub;
+    struct cy_sub_t heartbeat_sub;
 
     /// All topics are indexed both by name and by subject-ID for fast lookups.
     struct cy_tree_t* topics_by_name;
@@ -207,41 +208,44 @@ struct cy_t
 
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 /// This function will never perform any network exchanges.
-cy_err_t cy_new(struct cy_t* const               cy,
-                const uint64_t                   uid,
-                const char* const                namespace_,
-                const cy_now_t                   now,
-                const cy_transport_publish_t     publish,
-                const cy_transport_subscribe_t   subscribe,
+cy_err_t cy_new(struct cy_t* const cy,
+                const uint64_t uid,
+                const char* const namespace_,
+                const cy_now_t now,
+                const cy_transport_publish_t publish,
+                const cy_transport_subscribe_t subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
-                void* const                      user,
-                void* const                      heartbeat_topic_user);
-void     cy_destroy(struct cy_t* const cy);
+                void* const user,
+                void* const heartbeat_topic_user);
+void cy_destroy(struct cy_t* const cy);
 
-/// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200 ms,
-/// the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
+/// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200
+/// ms, the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
 struct cy_update_event_t
 {
-    struct cy_topic_t*      topic;  ///< Topic associated with the transport subscription by the lib*ards.
-    uint64_t                ts_us;
-    struct cy_tfer_meta_t   tfer;
+    struct cy_topic_t* topic; ///< Topic associated with the transport subscription by the lib*ards.
+    uint64_t ts_us;
+    struct cy_tfer_meta_t tfer;
     struct cy_payload_mut_t payload;
 };
 cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
 
-/// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the problem.
-/// Transport frames with mismatched discriminators must be dropped; no processing at the transport layer is needed.
-/// The function may emit one transfer; the result of the emission is returned. Transient errors can be safely ignored.
+/// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the
+/// problem. Transport frames with mismatched discriminators must be dropped; no processing at the transport layer
+/// is needed. The function may emit one transfer; the result of the emission is returned. Transient errors can be
+/// safely ignored.
 ///
 /// If the transport library is unable to efficiently find the topic when a collision is found,
 /// use cy_topic_find_by_subject_id().
-/// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining like:
+/// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining
+/// like:
 ///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_id));
 cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
-/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation.
+/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip
+/// allocation.
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name);
 void cy_topic_destroy(struct cy_topic_t* const topic);
 
@@ -262,11 +266,11 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 /// Topic discriminator is transmitted with every transport frame for subject-ID collision detection.
 /// It is defined as the 16 most significant bits of the topic name hash, while the least significant bits are
 /// used for deterministic subject-ID allocation. The two numbers must be uncorrelated to minimize collisions.
-/// For stationary topics, the discriminator is zero because we don't want to check it for compatibility with old nodes;
-/// this is ensured by our special topic hash function.
+/// For stationary topics, the discriminator is zero because we don't want to check it for compatibility with old
+/// nodes; this is ensured by our special topic hash function.
 inline uint16_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {
-    return (uint16_t) (topic->hash >> 48U);
+    return (uint16_t)(topic->hash >> 48U);
 }
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
@@ -274,16 +278,17 @@ inline uint16_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 ///
 /// Future expansion: add wildcard subscribers that match topic names by pattern. Requires unbounded dynamic memory.
 ///
-/// Creation of a new subscription will involve network transactions unless the subject-ID is already known or is fixed.
-/// However, the operation is non-blocking --- the message will be enqueued and sent in the background.
+/// Creation of a new subscription will involve network transactions unless the subject-ID is already known or is
+/// fixed. However, the operation is non-blocking --- the message will be enqueued and sent in the background.
 ///
-/// It is allowed to remove the subscription from its own callback, but not from the callback of another subscription.
+/// It is allowed to remove the subscription from its own callback, but not from the callback of another
+/// subscription.
 cy_err_t cy_subscribe(struct cy_topic_t* const topic,
-                      struct cy_sub_t* const   sub,
-                      const size_t             extent,
-                      const uint64_t           tfer_id_timeout_us,
-                      const cy_sub_callback_t  callback);
-void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
+                      struct cy_sub_t* const sub,
+                      const size_t extent,
+                      const uint64_t tfer_id_timeout_us,
+                      const cy_sub_callback_t callback);
+void cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
 
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
 
