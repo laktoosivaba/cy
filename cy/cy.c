@@ -268,7 +268,7 @@ static void on_heartbeat(struct cy_sub_t* const sub,
 // ----------------------------------------  TOPIC HASH  ----------------------------------------
 
 /// Returns CY_SUBJECT_ID_INVALID if the string is not a valid pinned subject-ID form.
-/// Stationary topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
+/// Pinned topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
 /// The only requirement to ensure this is that there must be no leading zeros in the number.
 static uint16_t parse_pinned(const char* s)
 {

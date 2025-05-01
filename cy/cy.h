@@ -125,7 +125,7 @@ struct cy_topic_t
     ///
     /// For pinned topics, the name hash equals the subject-ID.
     /// This ensures that the preferred subject-ID is still found using (hash % CY_ALLOC_SUBJECT_COUNT);
-    /// also, it ensures that the discriminator (hash >> 48) is zero, thus disabling its check.
+    /// also, it ensures that the discriminator (hash >> 32) is zero, thus disabling its check.
     uint64_t hash;
 
     uint16_t subject_id;
@@ -136,9 +136,7 @@ struct cy_topic_t
     uint64_t last_gossip_us;
 
     /// True if the ID is assigned directly; e.g., "/7509".
-    /// Stationary topics must NOT check the discriminator for collisions, to ensure compatibility with old
-    /// deployments. Valid discriminator must still be populated for outgoing transfers, though, for future
-    /// compatibility.
+    /// Pinned topics have zero discriminator for compatibility with old v1 nodes.
     bool pinned;
 
     struct cy_crdt_meta_t crdt_meta;
@@ -267,13 +265,15 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 }
 
 /// Topic discriminator is transmitted with every transport frame for subject-ID collision detection.
-/// It is defined as the 16 most significant bits of the topic name hash, while the least significant bits are
+/// It is defined as the 32 most significant bits of the topic name hash, while the least significant bits are
 /// used for deterministic subject-ID allocation. The two numbers must be uncorrelated to minimize collisions.
 /// For pinned topics, the discriminator is zero because we don't want to check it for compatibility with old
 /// nodes; this is ensured by our special topic hash function.
-inline uint16_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
+/// Transports are expected to use either the full 32-bit discriminator or any part thereof, depending on
+/// their own design constraints.
+inline uint32_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {
-    return (uint16_t)(topic->hash >> 48U);
+    return (uint32_t)(topic->hash >> 32U);
 }
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
