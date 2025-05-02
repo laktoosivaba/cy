@@ -287,9 +287,9 @@ static inline cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp, const uin
     // we are subscribed to. Currently, we don't have a simple value that says how many topics we are subscribed to,
     // so we simply use the total number of topics; it's a bit wasteful but it's not a huge deal and we definitely
     // don't want to scan the topic index to count the ones we are subscribed to.
-    const size_t   max_rx_count           = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
-    size_t         rx_count               = 0;
-    UDPRxAwaitable rx_await[max_rx_count] = { 0 };
+    const size_t   max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
+    size_t         rx_count     = 0;
+    UDPRxAwaitable rx_await[max_rx_count];              // Initialization is not possible and is very wasteful anyway.
     for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) // Subscription sockets (one per topic per iface).
     {
         rx_await[rx_count].handle         = &app->sub_pnp_node_id_allocation.io[i];

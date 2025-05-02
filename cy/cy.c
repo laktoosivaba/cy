@@ -509,6 +509,26 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t s
     return topic;
 }
 
+static void topic_for_each_impl(struct cy_tree_t* const tree, // NOLINT(*-no-recursion)
+                                void (*callback)(struct cy_topic_t* const topic, void* user),
+                                void* const user)
+{
+    if (tree != NULL) {
+        topic_for_each_impl(tree->lr[0], callback, user);
+        callback((struct cy_topic_t*)tree, user);
+        topic_for_each_impl(tree->lr[1], callback, user);
+    }
+}
+
+void cy_topic_for_each(struct cy_t* const cy,
+                       void (*callback)(struct cy_topic_t* const topic, void* user),
+                       void* const user)
+{
+    if ((cy != NULL) && (callback != NULL)) {
+        topic_for_each_impl(cy->topics_by_hash, callback, user);
+    }
+}
+
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
                       struct cy_subscription_t* const  sub,
                       const size_t                     extent,

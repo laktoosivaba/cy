@@ -272,6 +272,13 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
     return topic->sub_list != NULL;
 }
 
+/// Iterate over all topics in the system ordered by hash.
+/// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
+/// The function does nothing if the cy or callback are NULL.
+void cy_topic_for_each(struct cy_t* const cy,
+                       void (*callback)(struct cy_topic_t* const topic, void* user),
+                       void* const user);
+
 /// Topic discriminator is fused into every transport frame and possibly transfer for subject-ID collision detection.
 /// It is defined as the 51 most significant bits of the topic name hash, while the least significant bits are
 /// used for deterministic subject-ID allocation. The two numbers must be uncorrelated to minimize collisions.
