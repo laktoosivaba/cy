@@ -126,7 +126,7 @@ struct cy_topic_t
     ///
     /// For pinned topics, the name hash equals the subject-ID.
     /// This ensures that the preferred subject-ID is still found using (hash % CY_ALLOC_SUBJECT_COUNT);
-    /// also, it ensures that the discriminator (hash >> 32) is zero, thus disabling its check.
+    /// also, it ensures that the discriminator (hash >> CY_SUBJECT_BITS) is zero, thus disabling its check.
     uint64_t hash;
 
     uint16_t subject_id;
@@ -138,6 +138,7 @@ struct cy_topic_t
 
     /// True if the ID is assigned directly; e.g., "/7509".
     /// Pinned topics have zero discriminator for compatibility with old v1 nodes.
+    /// Pinned topics should reside above CY_ALLOC_SUBJECT_COUNT; otherwise, the network may have to move them.
     bool pinned;
 
     struct cy_crdt_meta_t crdt_meta;
@@ -146,13 +147,11 @@ struct cy_topic_t
     void* user;
 
     /// Only used if the application publishes data on this topic.
-    /// Hint: if the application needs to detect if a topic is published to, check tfer_id>0.
     /// The priority can be adjusted as needed by the user.
     uint64_t       pub_tfer_id;
     enum cy_prio_t pub_priority;
 
     /// Only used if the application subscribes on this topic.
-    /// Hint: if the application needs to detect if a topic is subscribed to, check sub_list!=NULL.
     struct cy_sub_t* sub_list;
     uint64_t         sub_tfer_id_timeout_us;
     size_t           sub_extent;
@@ -273,7 +272,9 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 /// discriminator or any part thereof (excepting the most significant zero bits ofc), depending on their design.
 ///
 /// Given the size of the subject-ID space of 6144 identifiers and 2^51 possible discriminators, the probability of
-/// a collision on a network with 1000 topics is bday(6144*2**51, 1000) ~ 3.6e-14, or one in ~28 trillion.
+/// a collision on a network with 1000 topics is birthday(6144*(2**51), 1000) ~ 3.6e-14, or one in ~28 trillion.
+/// This is assuming that all bits of the discriminator are used. If only 32 bits are used, the probability is
+/// birthday(6144*(2**32), 1000) ~ 1.9e-8, or one in 53 million.
 inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {
     return topic->hash >> CY_SUBJECT_BITS;
