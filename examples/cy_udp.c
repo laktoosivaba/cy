@@ -24,6 +24,16 @@ static uint64_t min_u64(const uint64_t a, const uint64_t b)
     return (a < b) ? a : b;
 }
 
+static void handle_error(struct cy_err_handler_t* const handler, const cy_err_t err, void* const culprit)
+{
+    assert(handler != NULL);
+    handler->occurrences++;
+    handler->last_error = err;
+    if (handler->callback != NULL) {
+        handler->callback(handler, culprit);
+    }
+}
+
 uint64_t cy_udp_now_us(void)
 {
     struct timespec ts;
@@ -97,8 +107,8 @@ static cy_err_t transport_subscribe(struct cy_topic_t* const cy_topic)
     const struct cy_udp_t* const cy_udp       = (struct cy_udp_t*)cy_topic->cy;
 
     // Set up the udpard subscription. This does not yet allocate any resources.
-    cy_err_t res =
-      udpardRxSubscriptionInit(&cy_udp_topic->sub, cy_topic->subject_id, cy_topic->sub_extent, cy_udp->rx_mem);
+    cy_err_t res = (cy_err_t)udpardRxSubscriptionInit(
+      &cy_udp_topic->sub, cy_topic->subject_id, cy_topic->sub_extent, cy_udp->rx_mem);
     if (res < 0) {
         return res; // No cleanup needed, no resources allocated yet.
     }
@@ -107,12 +117,10 @@ static cy_err_t transport_subscribe(struct cy_topic_t* const cy_topic)
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         cy_udp_topic->sock_rx[i].fd = -1;
         if ((res >= 0) && is_valid_ip(cy_udp->io[i].local_iface_address)) {
-            res = (udp_rx_init(&cy_udp_topic->sock_rx[i],
-                               cy_udp->io[i].local_iface_address,
-                               cy_udp_topic->sub.udp_ip_endpoint.ip_address,
-                               cy_udp_topic->sub.udp_ip_endpoint.udp_port) < 0)
-                    ? -1
-                    : 0;
+            res = udp_rx_init(&cy_udp_topic->sock_rx[i],
+                              cy_udp->io[i].local_iface_address,
+                              cy_udp_topic->sub.udp_ip_endpoint.ip_address,
+                              cy_udp_topic->sub.udp_ip_endpoint.udp_port);
         }
     }
 
@@ -159,7 +167,8 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     for (uint_fast8_t i = 0; (i < CY_UDP_IFACE_COUNT_MAX) && (res >= 0); i++) {
         cy_udp->io[i].local_iface_address = 0;
         cy_udp->io[i].tx_sock.fd          = -1;
-        res = udpardTxInit(&cy_udp->io[i].tx, &cy_udp->local_node_id, tx_queue_capacity_per_iface, cy_udp->mem);
+        res =
+          (cy_err_t)udpardTxInit(&cy_udp->io[i].tx, &cy_udp->local_node_id, tx_queue_capacity_per_iface, cy_udp->mem);
     }
     if (res < 0) {
         return res; // Cleanup not required -- no resources allocated yet.
@@ -169,7 +178,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     for (uint_fast8_t i = 0; (i < CY_UDP_IFACE_COUNT_MAX) && (res >= 0); i++) {
         if (is_valid_ip(local_iface_address[i])) {
             cy_udp->io[i].local_iface_address = local_iface_address[i];
-            res = (udp_tx_init(&cy_udp->io[i].tx_sock, local_iface_address[i]) < 0) ? -1 : 0;
+            res                               = udp_tx_init(&cy_udp->io[i].tx_sock, local_iface_address[i]);
         } else {
             cy_udp->io[i].tx.queue_capacity = 0;
         }
@@ -224,11 +233,10 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
                         break; // Socket no longer writable, stop sending for now to retry later.
                     }
                     if (send_res < 0) {
-                        cy_udp->diag.iface[i].tx_errors++;
-                        cy_udp->diag.iface[i].tx_last_error = send_res;
+                        handle_error(&cy_udp->io[i].err_sock, send_res, cy_udp);
                     }
                 } else {
-                    cy_udp->diag.iface[i].tx_timeouts++;
+                    cy_udp->io[i].tx_timeout_count++;
                 }
                 udpardTxFree(cy_udp->io[i].tx.memory, udpardTxPop(&cy_udp->io[i].tx, tqi));
                 tqi = udpardTxPeek(&cy_udp->io[i].tx);
@@ -356,7 +364,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     cy_topic_for_each(&cy_udp->base, &on_topic_for_each, &rx_ctx);
 
     // Do a blocking wait.
-    cy_err_t res = (udp_wait(deadline_us, tx_count, tx_await, rx_ctx.count, rx_await) < 0) ? -1 : 0;
+    cy_err_t res = udp_wait(deadline_us, tx_count, tx_await, rx_ctx.count, rx_await);
     if (res < 0) {
         goto hell;
     }
@@ -392,8 +400,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);
-            topic->diag.iface[iface_index].rx_errors++;
-            topic->diag.iface[iface_index].rx_last_error = rx_result;
+            handle_error(&topic->err_sock[iface_index], rx_result, topic);
             continue;
         }
 
@@ -401,8 +408,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         if (cy_topic_has_local_subscribers(&topic->base)) {
             const int_fast8_t er = udpard_receive_topic(ts_us, payload, &cy_udp->rx_mem, topic, iface_index);
             if (er < 0) {
-                topic->diag.udpard_rx_errors++;
-                topic->diag.udpard_rx_last_error = er;
+                handle_error(&topic->err_udpard_rx, er, topic);
             } else {
                 cy_updated = true;
             }
@@ -425,10 +431,10 @@ hell:
     return res;
 }
 
-cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp)
+cy_err_t cy_udp_wait_once(struct cy_udp_t* const cy_udp)
 {
     assert(cy_udp != NULL);
-    return spin_once_until(cy_udp, cy_udp_now_us() + CY_UDP_SPIN_ONCE_MAX_DURATION_us);
+    return spin_once_until(cy_udp, cy_udp_now_us() + CY_UPDATE_INTERVAL_MIN_us);
 }
 
 cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us)
@@ -443,4 +449,13 @@ cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadlin
         }
     }
     return res;
+}
+
+bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* const topic, const char* const name)
+{
+    assert(cy_udp != NULL);
+    assert(topic != NULL);
+    assert(name != NULL);
+    memset(topic, 0, sizeof(*topic));
+    return cy_topic_new(&cy_udp->base, &topic->base, name);
 }

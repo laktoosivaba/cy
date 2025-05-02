@@ -78,7 +78,7 @@ static const uint64_t crc64we_table[256] = {
     0x9AFCE626CE85B507ULL,
 };
 
-static inline uint64_t crc64we_string(const char* str)
+static uint64_t crc64we_string(const char* str)
 {
     assert(str != NULL);
     uint64_t crc = CRC64WE_INITIAL;
@@ -160,9 +160,19 @@ static struct cy_tree_t* cavl_factory_topic_gossip_time(void* const user_referen
 
 // ----------------------------------------  HEARTBEAT IO  ----------------------------------------
 
-static inline size_t smaller(const size_t a, const size_t b)
+static size_t smaller(const size_t a, const size_t b)
 {
     return (a < b) ? a : b;
+}
+
+static void handle_error(struct cy_err_handler_t* const handler, const cy_err_t err, void* const culprit)
+{
+    assert(handler != NULL);
+    handler->occurrences++;
+    handler->last_error = err;
+    if (handler->callback != NULL) {
+        handler->callback(handler, culprit);
+    }
 }
 
 struct topic_gossip_t
@@ -213,7 +223,7 @@ static size_t get_heartbeat_size(const struct heartbeat_t* const obj)
     return sizeof(*obj) - (CY_TOPIC_NAME_MAX - obj->topic_gossip.name_length);
 }
 
-static cy_err_t gossip(struct cy_topic_t* const topic)
+static void gossip(struct cy_topic_t* const topic)
 {
     assert(topic != NULL);
     struct cy_t* const cy = topic->cy;
@@ -229,10 +239,12 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     const struct cy_payload_t payload = { .data = &msg, .size = msg_size }; // FIXME serialization
 
     // Publish the message.
-    const cy_err_t res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
+    const cy_err_t pub_res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
     cy->heartbeat_topic->pub_transfer_id++;
-    if (res >= 0) {
+    if (pub_res >= 0) {
         cy->heartbeat_last_us = now;
+    } else {
+        handle_error(&cy->err_heartbeat_pub, pub_res, topic);
     }
 
     // Update the gossip time index, even if the publication failed, to ensure we don't get stuck publishing
@@ -244,7 +256,6 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
           &cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
         assert(tree == &topic->index_gossip_time);
     }
-    return res;
 }
 
 static void on_heartbeat(struct cy_subscription_t* const sub,
@@ -399,16 +410,14 @@ void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
     }
 }
 
-cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic)
+void cy_notify_discriminator_collision(struct cy_topic_t* topic)
 {
     assert((topic != NULL) && (topic->cy != NULL));
-    cy_err_t       res = 0;
     const uint64_t now = topic->cy->now(topic->cy);
     if ((now - topic->last_gossip_us) >= GOSSIP_RATE_LIMIT_us) {
-        res = gossip(topic);
+        gossip(topic);
         assert(topic->last_gossip_us >= now);
     }
-    return res;
 }
 
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name)
@@ -469,7 +478,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
                          &cavl_factory_topic_gossip_time);
         topic->crdt_meta.lamport_clock++;
         topic->crdt_meta.owner_uid = topic->cy->uid;
-        (void)gossip(topic);
+        gossip(topic);
         assert(topic->last_gossip_us > 0);
     }
 

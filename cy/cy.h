@@ -43,10 +43,11 @@ extern "C"
 
 #define CY_SUBJECT_ID_INVALID 0xFFFFU
 
-typedef int_fast8_t cy_err_t;
+typedef int32_t cy_err_t;
 
 struct cy_t;
 struct cy_topic_t;
+struct cy_err_handler_t;
 
 enum cy_prio_t
 {
@@ -171,6 +172,22 @@ struct cy_subscription_t
     void* user;
 };
 
+/// The culprit points to the object that caused the error or is directly related to it.
+/// The specifics are documented at the place of use.
+/// The callback pointer may be NULL if error notifications are not needed; this is not recommended, however.
+typedef void (*cy_err_callback_t)(struct cy_err_handler_t* const self, void* const culprit);
+
+/// This is used to log and optionally report transient errors that are not fatal.
+/// The occurrences count and the last_error are updated whenever an error is encountered internally.
+/// If the callback is not NULL, it is invoked afterward.
+struct cy_err_handler_t
+{
+    uint64_t          occurrences;
+    cy_err_t          last_error;
+    void*             user; ///< Arbitrarily mutable by the user.
+    cy_err_callback_t callback;
+};
+
 struct cy_t
 {
     /// The UID is actually composed of 16-bit vendor-ID, 16-bit product-ID, and 32-bit instance-ID (aka serial
@@ -196,12 +213,14 @@ struct cy_t
     cy_transport_subscribe_t   transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
 
-    // TODO FIXME ON GOSSIP ERROR
-
-    /// Topics needed by Cy itself.
+    /// Heartbeat topic and related items.
     struct cy_topic_t*       heartbeat_topic;
     struct cy_subscription_t heartbeat_sub;
     uint64_t                 heartbeat_last_us;
+
+    /// The callback culprit pointer points to the topic whose metadata was being gossiped when the error occurred.
+    /// If necessary, the topic has a back-reference to the cy_t instance.
+    struct cy_err_handler_t err_heartbeat_pub;
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;
@@ -219,6 +238,9 @@ struct cy_t
 /// the user can add additional subscriptions to it later.
 ///
 /// The function will immediately publish a heartbeat message and setup a heartbeat subscription.
+/// Heartbeat errors are considered transient; as such, they are only reported via err_heartbeat_pub.
+/// After the function returns, the user should configure the error callback and check if there are any errors
+/// that may have occurred before the callback was set.
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
@@ -232,7 +254,8 @@ void     cy_destroy(struct cy_t* const cy);
 
 /// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200
 /// ms, the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
-/// The function is considered infallible because gossip errors are not considered significant.
+/// The function is considered infallible because gossip errors are not considered significant and are reported via
+/// the heartbeat_publication_err_handler.
 struct cy_update_event_t
 {
     struct cy_topic_t*        topic; ///< Topic associated with the transport subscription by the lib*ards.
@@ -252,7 +275,7 @@ void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
 /// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining
 /// like:
 ///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_id));
-cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic);
+void cy_notify_discriminator_collision(struct cy_topic_t* topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
@@ -316,8 +339,6 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
 void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t* const sub);
 
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
-
-// TODO FIXME getters/setters for the user-modifiable and user-readable fields.
 
 #ifdef __cplusplus
 }
