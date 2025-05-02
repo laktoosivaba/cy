@@ -1,14 +1,13 @@
 /// Copyright (c) Pavel Kirienko
 
 #include "cy.h"
+#include "_cy_cavl.h"
 
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "_cy_cavl.h"
 
 #define BYTE_BITS 8U
 #define BYTE_MAX  0xFFU
@@ -230,8 +229,8 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     const struct cy_payload_t payload = { .data = &msg, .size = msg_size }; // FIXME serialization
 
     // Publish the message.
-    const cy_err_t res = cy->transport_publish(&cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
-    cy->heartbeat_topic.pub_tfer_id++;
+    const cy_err_t res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
+    cy->heartbeat_topic->pub_transfer_id++;
     if (res >= 0) {
         cy->heartbeat_last_us = now;
     }
@@ -248,10 +247,10 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     return res;
 }
 
-static void on_heartbeat(struct cy_sub_t* const        sub,
-                         const uint64_t                ts_us,
-                         const struct cy_tfer_meta_t   tfer,
-                         const struct cy_payload_mut_t payload)
+static void on_heartbeat(struct cy_subscription_t* const sub,
+                         const uint64_t                  ts_us,
+                         const struct cy_transfer_meta_t transfer,
+                         const struct cy_payload_mut_t   payload)
 {
     assert(sub != NULL);
     assert(payload.data != NULL);
@@ -259,7 +258,7 @@ static void on_heartbeat(struct cy_sub_t* const        sub,
     assert(payload.size >= (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX));
 
     (void)sub;
-    (void)tfer;
+    (void)transfer;
     (void)ts_us;
     (void)payload;
     assert(false); // TODO IMPLEMENT
@@ -312,12 +311,12 @@ static uint64_t topic_hash(const char* const name, bool* const out_pinned)
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
+                struct cy_topic_t* const         heartbeat_topic,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
-                void* const                      user,
-                void* const                      heartbeat_topic_user)
+                void* const                      user)
 {
     assert(cy != NULL);
     assert(uid != 0);
@@ -344,25 +343,25 @@ cy_err_t cy_new(struct cy_t* const               cy,
     cy->transport_publish     = publish;
     cy->transport_subscribe   = subscribe;
     cy->transport_unsubscribe = unsubscribe;
+    cy->heartbeat_topic       = heartbeat_topic;
     cy->topics_by_hash        = NULL;
     cy->topics_by_subject_id  = NULL;
+    cy->topics_by_gossip_time = NULL;
     cy->topic_count           = 0;
 
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
     // Register the heartbeat topic and subscribe. This is a pinned topic so no network exchange will take place.
-    const bool topic_ok = cy_topic_new(cy, &cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
+    const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
     assert(topic_ok);
-    cy->heartbeat_topic.user = heartbeat_topic_user;
-
-    const cy_err_t res = cy_subscribe(&cy->heartbeat_topic,
+    const cy_err_t res = cy_subscribe(cy->heartbeat_topic,
                                       &cy->heartbeat_sub,
                                       sizeof(struct heartbeat_t),
-                                      CY_TFER_ID_TIMEOUT_DEFAULT_us,
+                                      CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
                                       &on_heartbeat);
     if (res < 0) {
-        cy_topic_destroy(&cy->heartbeat_topic);
+        cy_topic_destroy(cy->heartbeat_topic);
     }
     return res;
 }
@@ -376,12 +375,12 @@ cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt)
         assert(evt->topic->cy == cy);
         // The transport layer is responsible for comparing the topic discriminator.
         // If we got something here, the discriminator must be correct.
-        struct cy_sub_t* sub = evt->topic->sub_list;
+        struct cy_subscription_t* sub = evt->topic->sub_list;
         while (sub != NULL) {
             assert(sub->topic == evt->topic);
-            struct cy_sub_t* const next = sub->next; // In case the callback deletes this subscription.
+            struct cy_subscription_t* const next = sub->next; // In case the callback deletes this subscription.
             if (sub->callback != NULL) {
-                sub->callback(sub, evt->ts_us, evt->tfer, evt->payload);
+                sub->callback(sub, evt->ts_us, evt->transfer, evt->payload);
             }
             sub = next;
         }
@@ -434,11 +433,11 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->crdt_meta.lamport_clock = 0;
     topic->crdt_meta.owner_uid     = 0;
 
-    topic->user         = NULL;
-    topic->pub_tfer_id  = 0;
-    topic->pub_priority = cy_prio_nominal;
-    topic->sub_list     = NULL;
-    topic->sub_active   = false;
+    topic->user            = NULL;
+    topic->pub_transfer_id = 0;
+    topic->pub_priority    = cy_prio_nominal;
+    topic->sub_list        = NULL;
+    topic->sub_active      = false;
 
     bool ok = (topic->name_len > 0) && (topic->name_len <= CY_TOPIC_NAME_MAX) && //
               (cy->topic_count < CY_ALLOC_SUBJECT_COUNT);
@@ -510,24 +509,24 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t s
     return topic;
 }
 
-cy_err_t cy_subscribe(struct cy_topic_t* const topic,
-                      struct cy_sub_t* const   sub,
-                      const size_t             extent,
-                      const uint64_t           tfer_id_timeout_us,
-                      const cy_sub_callback_t  callback)
+cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
+                      struct cy_subscription_t* const  sub,
+                      const size_t                     extent,
+                      const uint64_t                   transfer_id_timeout_us,
+                      const cy_subscription_callback_t callback)
 {
     assert(topic != NULL);
     assert(sub != NULL);
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
-    topic->sub_tfer_id_timeout_us = tfer_id_timeout_us;
-    topic->sub_extent             = extent;
+    topic->sub_transfer_id_timeout_us = transfer_id_timeout_us;
+    topic->sub_extent                 = extent;
     memset(sub, 0, sizeof(*sub));
     sub->next     = NULL;
     sub->topic    = topic;
     sub->callback = callback; // May be NULL, we don't check at this stage (we do check later, safety first).
     // Append the list.
-    struct cy_sub_t* last = topic->sub_list;
+    struct cy_subscription_t* last = topic->sub_list;
     while ((last != NULL) && (last->next != NULL)) {
         last = last->next;
     }
@@ -552,6 +551,6 @@ cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_u
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     const cy_err_t res = topic->cy->transport_publish(topic, tx_deadline_us, payload);
-    topic->pub_tfer_id++; // The transfer-ID is always incremented, even on failure, to signal lost messages.
+    topic->pub_transfer_id++; // The transfer-ID is always incremented, even on failure, to signal lost messages.
     return res;
 }

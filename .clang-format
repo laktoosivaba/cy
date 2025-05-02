@@ -13,3 +13,4 @@ AlignConsecutiveMacros: true
 AlignConsecutiveShortCaseStatements: { Enabled: true }
 AlignEscapedNewlines: LeftWithLastLine
 AlignTrailingComments: true
+SortIncludes: false
