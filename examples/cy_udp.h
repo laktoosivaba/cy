@@ -6,13 +6,25 @@
 #include <cy.h>
 #include <udpard.h>
 
-#define CY_UDP_IFACE_COUNT_MAX UDPARD_NETWORK_INTERFACE_COUNT_MAX
+#define CY_UDP_IFACE_COUNT_MAX           UDPARD_NETWORK_INTERFACE_COUNT_MAX
+#define CY_UDP_SPIN_ONCE_MAX_DURATION_us CY_UPDATE_INTERVAL_MIN_us
 
 struct cy_udp_topic_t
 {
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
     struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
+
+    struct
+    {
+        uint64_t    udpard_rx_errors;
+        int_fast8_t udpard_rx_last_error;
+        struct
+        {
+            uint64_t rx_errors;
+            int16_t  rx_last_error;
+        } iface[CY_UDP_IFACE_COUNT_MAX];
+    } diag;
 };
 
 struct cy_udp_t
@@ -55,11 +67,16 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const size_t           tx_queue_capacity_per_iface,
                     void* const            user);
 
+/// Wait for events (blocking), process them, and return. Invoke this in a tight superloop to keep the system alive.
+/// The function is guaranteed to return no later than in CY_UDP_SPIN_ONCE_MAX_DURATION_us.
+cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp);
+
+/// Keep running the event loop until the deadline is reached or until the first error.
 /// If the deadline is not in the future, the function will process pending events once and return without blocking.
 /// If the deadline is in the future and there are currently no events to process, the function will block until the
 /// deadline is reached or until an event arrives. The function may return early even if no events are available.
 /// The current monotonic time is as defined in cy_udp_now().
-cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp, const uint64_t deadline_us);
+cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us);
 
 /// Trivial convenience wrapper over cy_topic_new().
 static inline bool cy_udp_topic_new(struct cy_udp_t* const       cy_udp,

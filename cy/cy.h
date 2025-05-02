@@ -161,7 +161,7 @@ struct cy_topic_t
 typedef void (*cy_subscription_callback_t)(struct cy_subscription_t*,
                                            uint64_t,
                                            struct cy_transfer_meta_t,
-                                           struct cy_payload_mut_t);
+                                           struct cy_payload_t);
 struct cy_subscription_t
 {
     struct cy_subscription_t* next;
@@ -195,6 +195,8 @@ struct cy_t
     cy_transport_publish_t     transport_publish;
     cy_transport_subscribe_t   transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
+
+    // TODO FIXME ON GOSSIP ERROR
 
     /// Topics needed by Cy itself.
     struct cy_topic_t*       heartbeat_topic;
@@ -230,14 +232,15 @@ void     cy_destroy(struct cy_t* const cy);
 
 /// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200
 /// ms, the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
+/// The function is considered infallible because gossip errors are not considered significant.
 struct cy_update_event_t
 {
     struct cy_topic_t*        topic; ///< Topic associated with the transport subscription by the lib*ards.
     uint64_t                  ts_us;
     struct cy_transfer_meta_t transfer;
-    struct cy_payload_mut_t   payload;
+    struct cy_payload_t       payload;
 };
-cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
+void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt);
 
 /// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the
 /// problem. Transport frames with mismatched discriminators must be dropped; no processing at the transport layer
@@ -266,7 +269,7 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t s
 /// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
 /// The function does nothing if the cy or callback are NULL.
 void cy_topic_for_each(struct cy_t* const cy,
-                       void (*callback)(struct cy_topic_t* const topic, void* user),
+                       void (*callback)(struct cy_topic_t* const topic, void* const user),
                        void* const user);
 
 inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)

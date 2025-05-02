@@ -250,7 +250,7 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
 static void on_heartbeat(struct cy_subscription_t* const sub,
                          const uint64_t                  ts_us,
                          const struct cy_transfer_meta_t transfer,
-                         const struct cy_payload_mut_t   payload)
+                         const struct cy_payload_t       payload)
 {
     assert(sub != NULL);
     assert(payload.data != NULL);
@@ -366,7 +366,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
     return res;
 }
 
-cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt)
+void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
 {
     assert(cy != NULL);
 
@@ -390,16 +390,13 @@ cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt)
     /// or our own proposal, or as a corrective entry if a conflict is found.
     /// If that happened, we don't want to transmit another heartbeat immediately to regulate the traffic.
     /// This is why we check for the time here at the end, after the incoming transfer is handled.
-    cy_err_t res = 0;
     if ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us) {
         const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
         assert(t != NULL); // We always have at least the heartbeat topic.
         struct cy_topic_t* const x = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
         assert(x->cy == cy);
-        res = gossip(x);
+        gossip(x);
     }
-
-    return res;
 }
 
 cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic)
