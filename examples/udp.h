@@ -28,90 +28,84 @@
 #include <stddef.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /// These definitions are highly platform-specific.
 /// Note that LibUDPard does not require the same socket to be usable for both transmission and reception.
-typedef struct
+struct udp_tx_handle_t
 {
     int fd;
-} UDPTxHandle;
-typedef struct
+};
+struct udp_rx_handle_t
 {
     int fd;
-} UDPRxHandle;
+};
 
 /// Initialize a TX socket for use with LibUDPard.
 /// The local iface address is used to specify the egress interface for multicast traffic.
 /// Per LibUDPard design, there is one TX socket per redundant interface, so the application needs to invoke
 /// this function once per interface.
 /// On error returns a negative error code.
-int16_t udpTxInit(UDPTxHandle* const self, const uint32_t local_iface_address);
+int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address);
 
 /// Send a datagram to the specified endpoint without blocking using the specified IP DSCP field value.
 /// A real-time embedded system should normally accept a transmission deadline here for the networking stack.
 /// Returns 1 on success, 0 if the socket is not ready for sending, or a negative error code.
-int16_t udpTxSend(UDPTxHandle* const self,
-                  const uint32_t     remote_address,
-                  const uint16_t     remote_port,
-                  const uint8_t      dscp,
-                  const size_t       payload_size,
-                  const void* const  payload);
+int16_t udp_tx_send(struct udp_tx_handle_t* const self,
+                    const uint32_t                remote_address,
+                    const uint16_t                remote_port,
+                    const uint8_t                 dscp,
+                    const size_t                  payload_size,
+                    const void* const             payload);
 
 /// No effect if the argument is invalid.
 /// This function is guaranteed to invalidate the handle.
-void udpTxClose(UDPTxHandle* const self);
+void udp_tx_close(struct udp_tx_handle_t* const self);
 
 /// Initialize an RX socket for use with LibUDPard, for subscription to subjects or for RPC traffic.
 /// The socket will be bound to the specified multicast group and port.
 /// Most socket APIs, in particular the Berkeley sockets, require the local iface address to be known,
 /// because it is used to decide which egress port to send IGMP membership reports over.
 /// On error returns a negative error code.
-int16_t udpRxInit(UDPRxHandle* const self,
-                  const uint32_t     local_iface_address,
-                  const uint32_t     multicast_group,
-                  const uint16_t     remote_port);
+int16_t udp_rx_init(struct udp_rx_handle_t* const self,
+                    const uint32_t                local_iface_address,
+                    const uint32_t                multicast_group,
+                    const uint16_t                remote_port);
 
 /// Read one datagram from the socket without blocking.
 /// The size of the destination buffer is specified in inout_payload_size; it is updated to the actual size of the
 /// received datagram upon return.
 /// Returns 1 on success, 0 if the socket is not ready for reading, or a negative error code.
-int16_t udpRxReceive(UDPRxHandle* const self, size_t* const inout_payload_size, void* const out_payload);
+int16_t udp_rx_receive(struct udp_rx_handle_t* const self, size_t* const inout_payload_size, void* const out_payload);
 
 /// No effect if the argument is invalid.
 /// This function is guaranteed to invalidate the handle.
-void udpRxClose(UDPRxHandle* const self);
-
-/// Auxiliary types for use with the I/O multiplexing function.
-/// The "ready" flag is updated to indicate whether the handle is ready for I/O.
-/// The "user_*" fields can be used for user-defined purposes.
-typedef struct
-{
-    UDPTxHandle* handle;
-    bool         ready;
-    void*        user_reference;
-} UDPTxAwaitable;
-typedef struct
-{
-    UDPRxHandle* handle;
-    bool         ready;
-    void*        user_reference;
-} UDPRxAwaitable;
+void udp_rx_close(struct udp_rx_handle_t* const self);
 
 /// Suspend execution until the expiration of the timeout (in microseconds) or until any of the specified handles
-/// become ready for reading (the RX group) or writing (the TX group).
+/// become ready for reading (the RX group) or writing (the TX group). Upon completion, handle pointers that are
+/// ready to read/write will be left intact, while those that are NOT ready will be set to NULL.
 /// The function may return earlier than the timeout even if no handles are ready.
 /// On error returns a negative error code.
-int16_t udpWait(const uint64_t        timeout_usec,
-                const size_t          tx_count,
-                UDPTxAwaitable* const tx,
-                const size_t          rx_count,
-                UDPRxAwaitable* const rx);
+///
+/// The recommended usage pattern is to keep parallel arrays of handle pointers and some context data, e.g.:
+///
+///     struct udp_tx_handle_t* tx_handles[UDPARD_IFACE_COUNT_MAX];
+///     struct udp_rx_handle_t* rx_handles[max_rx_handles];
+///     struct void* rx_context[max_rx_handles];                // Parallel array of context data.
+///     int16_t err = udp_wait(timeout_us, UDPARD_IFACE_COUNT_MAX, tx_handles, max_rx_handles, rx_handles);
+///     // Then handle the results.
+int16_t udp_wait(const uint64_t                 timeout_us,
+                 const size_t                   tx_count,
+                 struct udp_tx_handle_t** const tx,
+                 const size_t                   rx_count,
+                 struct udp_rx_handle_t** const rx);
 
 /// Convert an interface address from string to binary representation; e.g., "127.0.0.1" --> 0x7F000001.
 /// Returns zero if the address is not recognized.
-uint32_t udpParseIfaceAddress(const char* const address);
+uint32_t udp_parse_iface_address(const char* const address);
 
 #ifdef __cplusplus
 }

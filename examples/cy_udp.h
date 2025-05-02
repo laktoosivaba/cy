@@ -21,7 +21,7 @@ struct cy_udp_topic_t
 {
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
-    UDPRxHandle                 sock_rx[CY_UDP_IFACE_COUNT_MAX];
+    struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
 };
 
 struct cy_udp_t
@@ -34,9 +34,9 @@ struct cy_udp_t
 
     struct
     {
-        struct UdpardTx tx;
-        UDPTxHandle     tx_sock;
-        uint32_t        local_iface_address;
+        struct UdpardTx        tx;
+        struct udp_tx_handle_t tx_sock;
+        uint32_t               local_iface_address;
     } io[CY_UDP_IFACE_COUNT_MAX];
 
     struct
@@ -133,10 +133,10 @@ static inline cy_err_t _cy_udp_transport_subscribe(struct cy_topic_t* const cy_t
     for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         cy_udp_topic->sock_rx[i].fd = -1;
         if ((res >= 0) && _cy_udp_is_valid_ip(cy_udp->io[i].local_iface_address)) {
-            res = (udpRxInit(&cy_udp_topic->sock_rx[i],
-                             cy_udp->io[i].local_iface_address,
-                             cy_udp_topic->sub.udp_ip_endpoint.ip_address,
-                             cy_udp_topic->sub.udp_ip_endpoint.udp_port) < 0)
+            res = (udp_rx_init(&cy_udp_topic->sock_rx[i],
+                               cy_udp->io[i].local_iface_address,
+                               cy_udp_topic->sub.udp_ip_endpoint.ip_address,
+                               cy_udp_topic->sub.udp_ip_endpoint.udp_port) < 0)
                     ? -1
                     : 0;
         }
@@ -145,7 +145,7 @@ static inline cy_err_t _cy_udp_transport_subscribe(struct cy_topic_t* const cy_t
     // Cleanup on error.
     if (res < 0) {
         for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-            udpRxClose(&cy_udp_topic->sock_rx[i]);
+            udp_rx_close(&cy_udp_topic->sock_rx[i]);
         }
     }
     return res;
@@ -155,7 +155,7 @@ static inline void _cy_udp_transport_unsubscribe(struct cy_topic_t* const cy_top
 {
     udpardRxSubscriptionFree(&((struct cy_udp_topic_t*)cy_topic)->sub);
     for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-        udpRxClose(&((struct cy_udp_topic_t*)cy_topic)->sock_rx[i]);
+        udp_rx_close(&((struct cy_udp_topic_t*)cy_topic)->sock_rx[i]);
     }
 }
 
@@ -196,7 +196,7 @@ static inline cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     for (size_t i = 0; (i < CY_UDP_IFACE_COUNT_MAX) && (res >= 0); i++) {
         if (_cy_udp_is_valid_ip(local_iface_address[i])) {
             cy_udp->io[i].local_iface_address = local_iface_address[i];
-            res = (udpTxInit(&cy_udp->io[i].tx_sock, local_iface_address[i]) < 0) ? -1 : 0;
+            res = (udp_tx_init(&cy_udp->io[i].tx_sock, local_iface_address[i]) < 0) ? -1 : 0;
         } else {
             cy_udp->io[i].tx.queue_capacity = 0;
         }
@@ -224,7 +224,7 @@ static inline cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
             while ((it = udpardTxPeek(tx))) {
                 udpardTxFree(tx->memory, udpardTxPop(tx, it));
             }
-            udpTxClose(&cy_udp->io[i].tx_sock); // The handle may be invalid, but we don't care.
+            udp_tx_close(&cy_udp->io[i].tx_sock); // The handle may be invalid, but we don't care.
         }
     }
     return res;
@@ -241,12 +241,12 @@ static inline void _cy_udp_tx_offload(struct cy_udp_t* const cy_udp)
                 // Attempt transmission only if the frame is not yet timed out while waiting in the TX queue.
                 // Otherwise, just drop it and move on to the next one.
                 if ((tqi->deadline_usec == 0) || (tqi->deadline_usec > now_us)) {
-                    const int16_t send_res = udpTxSend(&cy_udp->io[i].tx_sock,
-                                                       tqi->destination.ip_address,
-                                                       tqi->destination.udp_port,
-                                                       tqi->dscp,
-                                                       tqi->datagram_payload.size,
-                                                       tqi->datagram_payload.data);
+                    const int16_t send_res = udp_tx_send(&cy_udp->io[i].tx_sock,
+                                                         tqi->destination.ip_address,
+                                                         tqi->destination.udp_port,
+                                                         tqi->dscp,
+                                                         tqi->datagram_payload.size,
+                                                         tqi->datagram_payload.data);
                     if (send_res == 0) {
                         break; // Socket no longer writable, stop sending for now to retry later.
                     }
@@ -274,11 +274,11 @@ static inline cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp, const uin
     _cy_udp_tx_offload(cy_udp);
 
     // Fill out the TX awaitable array. May be empty if there's nothing to transmit at the moment.
-    size_t         tx_count                         = 0;
-    UDPTxAwaitable tx_await[CY_UDP_IFACE_COUNT_MAX] = { 0 };
+    size_t                  tx_count                         = 0;
+    struct udp_tx_handle_t* tx_await[CY_UDP_IFACE_COUNT_MAX] = { 0 };
     for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         if (cy_udp->io[i].tx.queue_size > 0) { // There's something to transmit!
-            tx_await[tx_count].handle = &cy_udp->io[i].tx_sock;
+            tx_await[tx_count] = &cy_udp->io[i].tx_sock;
             tx_count++;
         }
     }
@@ -287,13 +287,13 @@ static inline cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp, const uin
     // we are subscribed to. Currently, we don't have a simple value that says how many topics we are subscribed to,
     // so we simply use the total number of topics; it's a bit wasteful but it's not a huge deal and we definitely
     // don't want to scan the topic index to count the ones we are subscribed to.
-    const size_t   max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
-    size_t         rx_count     = 0;
-    UDPRxAwaitable rx_await[max_rx_count];              // Initialization is not possible and is very wasteful anyway.
+    // This is a rather cumbersome operation as we need to traverse the topic tree; perhaps we should switch to epoll?
+    const size_t            max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
+    size_t                  rx_count     = 0;
+    struct udp_rx_handle_t* rx_await[max_rx_count];     // Initialization is not possible and is very wasteful anyway.
     for (size_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) // Subscription sockets (one per topic per iface).
     {
-        rx_await[rx_count].handle         = &app->sub_pnp_node_id_allocation.io[i];
-        rx_await[rx_count].user_reference = &app->sub_pnp_node_id_allocation;
+        rx_await[rx_count] = &app->sub_pnp_node_id_allocation.io[i];
         rx_count++;
         assert(rx_count <= (sizeof(rx_await) / sizeof(rx_await[0])));
         // TODO: handle RPC as well!
