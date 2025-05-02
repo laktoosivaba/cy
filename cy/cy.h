@@ -43,7 +43,7 @@ extern "C"
 
 #define CY_SUBJECT_ID_INVALID 0xFFFFU
 
-typedef int8_t cy_err_t;
+typedef int_fast8_t cy_err_t;
 
 struct cy_t;
 struct cy_topic_t;
