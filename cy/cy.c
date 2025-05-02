@@ -12,11 +12,11 @@
 #include "_cy_cavl.h"
 
 #define BYTE_BITS 8U
-#define BYTE_MAX 0xFFU
+#define BYTE_MAX  0xFFU
 
-#define HEARTBEAT_TOPIC_NAME "/7509"
-#define HEARTBEAT_EXTENT 200
-#define HEARTBEAT_PUB_PERIOD_us CY_UPDATE_INTERVAL_MIN_us
+#define HEARTBEAT_TOPIC_NAME     "/7509"
+#define HEARTBEAT_EXTENT         200
+#define HEARTBEAT_PUB_PERIOD_us  CY_UPDATE_INTERVAL_MIN_us
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
 
 /// If a collision is found, do not gossip the topic if it was last seen less than this long ago.
@@ -99,7 +99,7 @@ static inline uint64_t crc64we_string(const char* str)
 static int8_t cavl_predicate_topic_hash_raw(void* const user_reference, const struct cy_tree_t* const node)
 {
     assert((user_reference != NULL) && (node != NULL));
-    const uint64_t outer = *(uint64_t*)user_reference;
+    const uint64_t                 outer = *(uint64_t*)user_reference;
     const struct cy_topic_t* const inner =
       (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_hash));
     if (outer == inner->hash) {
@@ -124,7 +124,7 @@ static struct cy_tree_t* cavl_factory_topic_hash(void* const user_reference)
 static int8_t cavl_predicate_topic_subject_id_raw(void* const user_reference, const struct cy_tree_t* const node)
 {
     assert((user_reference != NULL) && (node != NULL));
-    const uint16_t outer = *(uint16_t*)user_reference;
+    const uint16_t                 outer = *(uint16_t*)user_reference;
     const struct cy_topic_t* const inner =
       (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_subject_id));
     if (outer == inner->subject_id) {
@@ -171,28 +171,28 @@ static inline size_t smaller(const size_t a, const size_t b)
 struct topic_gossip_t
 {
     struct cy_crdt_meta_t crdt_meta;
-    uint32_t ttl_ms;
-    uint16_t value;
-    uint16_t _padding_a;
-    uint32_t _padding_b;
-    uint8_t name_length;
-    char name[CY_TOPIC_NAME_MAX];
+    uint32_t              ttl_ms;
+    uint16_t              value;
+    uint16_t              _padding_a;
+    uint32_t              _padding_b;
+    uint8_t               name_length;
+    char                  name[CY_TOPIC_NAME_MAX];
 };
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
 {
-    uint32_t uptime;
-    uint32_t _padding_a;
-    uint64_t uid;
+    uint32_t              uptime;
+    uint32_t              _padding_a;
+    uint64_t              uid;
     struct topic_gossip_t topic_gossip;
 };
 
-static struct heartbeat_t make_heartbeat(const uint64_t uptime_us,
-                                         const uint64_t uid,
+static struct heartbeat_t make_heartbeat(const uint64_t              uptime_us,
+                                         const uint64_t              uid,
                                          const struct cy_crdt_meta_t crdt_meta,
-                                         const uint16_t crdt_value,
-                                         const char* const crdt_name)
+                                         const uint16_t              crdt_value,
+                                         const char* const           crdt_name)
 {
     struct heartbeat_t obj = {
         .uptime = (uint32_t)(uptime_us / 1000U),
@@ -221,7 +221,7 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     assert(topic != NULL);
     struct cy_t* const cy = topic->cy;
 
-    const uint64_t now = cy->now(cy);
+    const uint64_t           now = cy->now(cy);
     const struct heartbeat_t msg =
       make_heartbeat(now - cy->started_at_us, cy->uid, topic->crdt_meta, topic->subject_id, topic->name);
     const size_t msg_size = get_heartbeat_size(&msg);
@@ -240,7 +240,7 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     // the same gossip if error reporting is broken.
     {
         cavlRemove(&cy->topics_by_gossip_time, &topic->index_gossip_time);
-        topic->last_gossip_us = now;
+        topic->last_gossip_us              = now;
         const struct cy_tree_t* const tree = cavlSearch(
           &cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
         assert(tree == &topic->index_gossip_time);
@@ -248,9 +248,9 @@ static cy_err_t gossip(struct cy_topic_t* const topic)
     return res;
 }
 
-static void on_heartbeat(struct cy_sub_t* const sub,
-                         const uint64_t ts_us,
-                         const struct cy_tfer_meta_t tfer,
+static void on_heartbeat(struct cy_sub_t* const        sub,
+                         const uint64_t                ts_us,
+                         const struct cy_tfer_meta_t   tfer,
                          const struct cy_payload_mut_t payload)
 {
     assert(sub != NULL);
@@ -296,7 +296,7 @@ static uint16_t parse_pinned(const char* s)
 /// Topic hash is the cornerstone of the protocol.
 static uint64_t topic_hash(const char* const name, bool* const out_pinned)
 {
-    uint64_t hash = parse_pinned(name);
+    uint64_t   hash = parse_pinned(name);
     const bool stat = hash < CY_TOTAL_SUBJECT_COUNT;
     if (!stat) {
         hash = crc64we_string(name);
@@ -309,15 +309,15 @@ static uint64_t topic_hash(const char* const name, bool* const out_pinned)
 
 // ----------------------------------------  PUBLIC API  ----------------------------------------
 
-cy_err_t cy_new(struct cy_t* const cy,
-                const uint64_t uid,
-                const char* const namespace_,
-                const cy_now_t now,
-                const cy_transport_publish_t publish,
-                const cy_transport_subscribe_t subscribe,
+cy_err_t cy_new(struct cy_t* const               cy,
+                const uint64_t                   uid,
+                const char* const                namespace_,
+                const cy_now_t                   now,
+                const cy_transport_publish_t     publish,
+                const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
-                void* const user,
-                void* const heartbeat_topic_user)
+                void* const                      user,
+                void* const                      heartbeat_topic_user)
 {
     assert(cy != NULL);
     assert(uid != 0);
@@ -339,14 +339,14 @@ cy_err_t cy_new(struct cy_t* const cy,
         cy->namespace_[0] = '~';
         cy->namespace_[1] = '\0';
     }
-    cy->user = user;
-    cy->now = now;
-    cy->transport_publish = publish;
-    cy->transport_subscribe = subscribe;
+    cy->user                  = user;
+    cy->now                   = now;
+    cy->transport_publish     = publish;
+    cy->transport_subscribe   = subscribe;
     cy->transport_unsubscribe = unsubscribe;
-    cy->topics_by_name = NULL;
-    cy->topics_by_subject_id = NULL;
-    cy->topic_count = 0;
+    cy->topics_by_name        = NULL;
+    cy->topics_by_subject_id  = NULL;
+    cy->topic_count           = 0;
 
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
@@ -404,7 +404,7 @@ cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt)
 cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic)
 {
     assert((topic != NULL) && (topic->cy != NULL));
-    cy_err_t res = 0;
+    cy_err_t       res = 0;
     const uint64_t now = topic->cy->now(topic->cy);
     if ((now - topic->last_gossip_us) >= GOSSIP_RATE_LIMIT_us) {
         res = gossip(topic);
@@ -413,9 +413,9 @@ cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic)
     return res;
 }
 
-bool cy_topic_new(struct cy_t* const cy, //
+bool cy_topic_new(struct cy_t* const       cy, //
                   struct cy_topic_t* const topic,
-                  const char* const name)
+                  const char* const        name)
 {
     assert(cy != NULL);
     assert(topic != NULL);
@@ -429,16 +429,16 @@ bool cy_topic_new(struct cy_t* const cy, //
     topic->name_len = strlen(name);
     memcpy(topic->name, name, smaller(topic->name_len, CY_TOPIC_NAME_MAX));
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
-    topic->hash = topic_hash(name, &topic->pinned);
+    topic->hash                    = topic_hash(name, &topic->pinned);
 
     topic->crdt_meta.lamport_clock = 0;
-    topic->crdt_meta.owner_uid = 0;
+    topic->crdt_meta.owner_uid     = 0;
 
-    topic->user = NULL;
-    topic->pub_tfer_id = 0;
+    topic->user         = NULL;
+    topic->pub_tfer_id  = 0;
     topic->pub_priority = cy_prio_nominal;
-    topic->sub_list = NULL;
-    topic->sub_active = false;
+    topic->sub_list     = NULL;
+    topic->sub_active   = false;
 
     bool ok = (topic->name_len > 0) && (topic->name_len <= CY_TOPIC_NAME_MAX) && //
               (cy->topic_count < CY_ALLOC_SUBJECT_COUNT);
@@ -490,8 +490,8 @@ struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* cons
 {
     assert(cy != NULL);
     assert(name != NULL);
-    uint64_t hash = topic_hash(name, NULL);
-    struct cy_tree_t* const t = cavlSearch(&cy->topics_by_name, &hash, &cavl_predicate_topic_hash_raw, NULL);
+    uint64_t                hash = topic_hash(name, NULL);
+    struct cy_tree_t* const t    = cavlSearch(&cy->topics_by_name, &hash, &cavl_predicate_topic_hash_raw, NULL);
     if (t == NULL) {
         return NULL;
     }
@@ -516,20 +516,20 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t s
 }
 
 cy_err_t cy_subscribe(struct cy_topic_t* const topic,
-                      struct cy_sub_t* const sub,
-                      const size_t extent,
-                      const uint64_t tfer_id_timeout_us,
-                      const cy_sub_callback_t callback)
+                      struct cy_sub_t* const   sub,
+                      const size_t             extent,
+                      const uint64_t           tfer_id_timeout_us,
+                      const cy_sub_callback_t  callback)
 {
     assert(topic != NULL);
     assert(sub != NULL);
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     topic->sub_tfer_id_timeout_us = tfer_id_timeout_us;
-    topic->sub_extent = extent;
+    topic->sub_extent             = extent;
     memset(sub, 0, sizeof(*sub));
-    sub->next = NULL;
-    sub->topic = topic;
+    sub->next     = NULL;
+    sub->topic    = topic;
     sub->callback = callback; // May be NULL, we don't check at this stage (we do check later, safety first).
     // Append the list.
     struct cy_sub_t* last = topic->sub_list;
@@ -544,7 +544,7 @@ cy_err_t cy_subscribe(struct cy_topic_t* const topic,
     // Ensure the transport layer subscription is active.
     cy_err_t err = 0;
     if (!topic->sub_active) {
-        err = topic->cy->transport_subscribe(topic);
+        err               = topic->cy->transport_subscribe(topic);
         topic->sub_active = err >= 0;
     }
     return err;

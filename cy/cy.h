@@ -50,39 +50,39 @@ struct cy_topic_t;
 enum cy_prio_t
 {
     cy_prio_exceptional = 0,
-    cy_prio_immediate = 1,
-    cy_prio_fast = 2,
-    cy_prio_high = 3,
-    cy_prio_nominal = 4,
-    cy_prio_low = 5,
-    cy_prio_slow = 6,
-    cy_prio_optional = 7,
+    cy_prio_immediate   = 1,
+    cy_prio_fast        = 2,
+    cy_prio_high        = 3,
+    cy_prio_nominal     = 4,
+    cy_prio_low         = 5,
+    cy_prio_slow        = 6,
+    cy_prio_optional    = 7,
 };
 
 struct cy_payload_t
 {
-    size_t size;
+    size_t      size;
     const void* data;
 };
 
 struct cy_payload_mut_t
 {
     size_t size;
-    void* data;
+    void*  data;
 };
 
 struct cy_tree_t
 {
     struct cy_tree_t* up;
     struct cy_tree_t* lr[2];
-    int8_t bf;
+    int8_t            bf;
 };
 
 struct cy_tfer_meta_t
 {
     enum cy_prio_t priority;
-    uint16_t remote_node_id;
-    uint64_t tfer_id;
+    uint16_t       remote_node_id;
+    uint64_t       tfer_id;
 };
 
 /// Returns the current monotonic time in microseconds.
@@ -115,7 +115,7 @@ struct cy_topic_t
 
     /// The name is always null-terminated. We keep the size for convenience as well.
     size_t name_len;
-    char name[CY_TOPIC_NAME_MAX + 1];
+    char   name[CY_TOPIC_NAME_MAX + 1];
     /// Assuming we have 1000 topics, the probability of a topic name hash collision is:
     /// >>> from decimal import Decimal
     /// >>> n = 1000
@@ -147,24 +147,24 @@ struct cy_topic_t
     /// Only used if the application publishes data on this topic.
     /// Hint: if the application needs to detect if a topic is published to, check tfer_id>0.
     /// The priority can be adjusted as needed by the user.
-    uint64_t pub_tfer_id;
+    uint64_t       pub_tfer_id;
     enum cy_prio_t pub_priority;
 
     /// Only used if the application subscribes on this topic.
     /// Hint: if the application needs to detect if a topic is subscribed to, check sub_list!=NULL.
     struct cy_sub_t* sub_list;
-    uint64_t sub_tfer_id_timeout_us;
-    size_t sub_extent;
-    bool sub_active;
+    uint64_t         sub_tfer_id_timeout_us;
+    size_t           sub_extent;
+    bool             sub_active;
 };
 
 typedef void (*cy_sub_callback_t)(struct cy_sub_t*, uint64_t, struct cy_tfer_meta_t, struct cy_payload_mut_t);
 struct cy_sub_t
 {
-    struct cy_sub_t* next;
+    struct cy_sub_t*   next;
     struct cy_topic_t* topic;
-    cy_sub_callback_t callback;
-    void* user;
+    cy_sub_callback_t  callback;
+    void*              user;
 };
 
 struct cy_t
@@ -182,21 +182,21 @@ struct cy_t
 
     /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
     size_t namespace_len;
-    char namespace_[CY_NAMESPACE_NAME_MAX + 1];
+    char   namespace_[CY_NAMESPACE_NAME_MAX + 1];
 
     cy_now_t now;
 
     /// Transport layer interface functions.
     /// These can be underpinned by libcanard, libudpard, libserard, or any other transport library.
-    cy_transport_publish_t transport_publish;
-    cy_transport_subscribe_t transport_subscribe;
+    cy_transport_publish_t     transport_publish;
+    cy_transport_subscribe_t   transport_subscribe;
     cy_transport_unsubscribe_t transport_unsubscribe;
 
     uint64_t heartbeat_last_us;
 
     /// Topics needed by Cy itself.
     struct cy_topic_t heartbeat_topic;
-    struct cy_sub_t heartbeat_sub;
+    struct cy_sub_t   heartbeat_sub;
 
     /// All topics are indexed both by name and by subject-ID for fast lookups.
     struct cy_tree_t* topics_by_name;
@@ -209,24 +209,24 @@ struct cy_t
 
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 /// This function will never perform any network exchanges.
-cy_err_t cy_new(struct cy_t* const cy,
-                const uint64_t uid,
-                const char* const namespace_,
-                const cy_now_t now,
-                const cy_transport_publish_t publish,
-                const cy_transport_subscribe_t subscribe,
+cy_err_t cy_new(struct cy_t* const               cy,
+                const uint64_t                   uid,
+                const char* const                namespace_,
+                const cy_now_t                   now,
+                const cy_transport_publish_t     publish,
+                const cy_transport_subscribe_t   subscribe,
                 const cy_transport_unsubscribe_t unsubscribe,
-                void* const user,
-                void* const heartbeat_topic_user);
-void cy_destroy(struct cy_t* const cy);
+                void* const                      user,
+                void* const                      heartbeat_topic_user);
+void     cy_destroy(struct cy_t* const cy);
 
 /// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200
 /// ms, the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
 struct cy_update_event_t
 {
-    struct cy_topic_t* topic; ///< Topic associated with the transport subscription by the lib*ards.
-    uint64_t ts_us;
-    struct cy_tfer_meta_t tfer;
+    struct cy_topic_t*      topic; ///< Topic associated with the transport subscription by the lib*ards.
+    uint64_t                ts_us;
+    struct cy_tfer_meta_t   tfer;
     struct cy_payload_mut_t payload;
 };
 cy_err_t cy_update(struct cy_t* const cy, struct cy_update_event_t* const evt);
@@ -287,11 +287,11 @@ inline uint32_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 /// It is allowed to remove the subscription from its own callback, but not from the callback of another
 /// subscription.
 cy_err_t cy_subscribe(struct cy_topic_t* const topic,
-                      struct cy_sub_t* const sub,
-                      const size_t extent,
-                      const uint64_t tfer_id_timeout_us,
-                      const cy_sub_callback_t callback);
-void cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
+                      struct cy_sub_t* const   sub,
+                      const size_t             extent,
+                      const uint64_t           tfer_id_timeout_us,
+                      const cy_sub_callback_t  callback);
+void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_sub_t* const sub);
 
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
 
