@@ -295,12 +295,12 @@ void cy_topic_for_each(struct cy_t* const cy,
                        void (*callback)(struct cy_topic_t* const topic, void* const user),
                        void* const user);
 
-inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)
+static inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)
 {
     return topic->pub_transfer_id > 0;
 }
 
-inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
+static inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 {
     return topic->sub_list != NULL;
 }
@@ -316,7 +316,7 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 /// a collision on a network with 1000 topics is birthday(6144*(2**51), 1000) ~ 3.6e-14, or one in ~28 trillion.
 /// This is assuming that all bits of the discriminator are used. If only 32 bits are used, the probability is
 /// birthday(6144*(2**32), 1000) ~ 1.9e-8, or one in 53 million.
-inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
+static inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {
     return topic->hash >> CY_SUBJECT_BITS;
 }

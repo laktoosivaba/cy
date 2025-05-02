@@ -4,9 +4,6 @@
 #include "_cy_cavl.h"
 
 #include <assert.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <string.h>
 
 #define BYTE_BITS 8U
@@ -484,6 +481,12 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
 
     cy->topic_count += ok ? 1 : 0;
     return ok;
+}
+
+void cy_topic_destroy(struct cy_topic_t* const topic)
+{
+    assert(topic != NULL);
+    // TODO IMPLEMENT
 }
 
 struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name)

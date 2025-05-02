@@ -1,15 +1,9 @@
 /// Copyright (c) Pavel Kirienko
 
 #include "cy_udp.h"
-#include "udp.h"
-#include <cy.h>
-#include <udpard.h>
-
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
 
 #ifndef __USE_POSIX199309
 #define __USE_POSIX199309 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)

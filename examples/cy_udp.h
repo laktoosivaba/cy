@@ -30,7 +30,7 @@ struct cy_udp_t
         struct UdpardTx         tx;
         struct udp_tx_handle_t  tx_sock;
         uint32_t                local_iface_address;
-        struct cy_err_handler_t err_sock; ///< Culprit points to cy_udp_t.
+        struct cy_err_handler_t err_sock; ///< Culprit points to this cy_udp_t.
         uint64_t                tx_timeout_count;
     } io[CY_UDP_IFACE_COUNT_MAX];
 

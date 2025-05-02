@@ -25,6 +25,7 @@ Checks: >-
   -cert-err58-cpp,
   -cert-msc30-c,
   -cert-msc50-cpp,
+  -*-msc32-c,
   -*-magic-numbers,
   -*-owning-*,
   -*-array-to-pointer-decay,
