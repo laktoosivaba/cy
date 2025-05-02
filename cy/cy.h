@@ -262,6 +262,13 @@ void cy_topic_destroy(struct cy_topic_t* const topic);
 struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name);
 struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id);
 
+/// Iterate over all topics in arbitrary order.
+/// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
+/// The function does nothing if the cy or callback are NULL.
+void cy_topic_for_each(struct cy_t* const cy,
+                       void (*callback)(struct cy_topic_t* const topic, void* user),
+                       void* const user);
+
 inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)
 {
     return topic->pub_transfer_id > 0;
@@ -271,13 +278,6 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
 {
     return topic->sub_list != NULL;
 }
-
-/// Iterate over all topics in the system ordered by hash.
-/// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
-/// The function does nothing if the cy or callback are NULL.
-void cy_topic_for_each(struct cy_t* const cy,
-                       void (*callback)(struct cy_topic_t* const topic, void* user),
-                       void* const user);
 
 /// Topic discriminator is fused into every transport frame and possibly transfer for subject-ID collision detection.
 /// It is defined as the 51 most significant bits of the topic name hash, while the least significant bits are
