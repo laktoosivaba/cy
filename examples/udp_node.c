@@ -1,4 +1,4 @@
-#include "cyudp.h"
+#include "cy_udp.h"
 
 int main(void)
 {
