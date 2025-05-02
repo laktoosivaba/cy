@@ -38,7 +38,8 @@ extern "C"
 /// topics, needs 768 bytes of memory), so we prefer a simpler solution of having to force static topics into the
 /// higher ID range.
 #define CY_ALLOC_SUBJECT_COUNT 6144
-#define CY_TOTAL_SUBJECT_COUNT 8192
+#define CY_SUBJECT_BITS        13U
+#define CY_TOTAL_SUBJECT_COUNT (1UL << CY_SUBJECT_BITS)
 
 #define CY_SUBJECT_ID_INVALID 0xFFFFU
 
@@ -163,7 +164,7 @@ struct cy_sub_t
 {
     struct cy_sub_t*   next;
     struct cy_topic_t* topic;
-    cy_sub_callback_t  callback;
+    cy_sub_callback_t  callback; ///< Maybe NULL; may be changed by the user at any time (e.g. to implement FSM).
     void*              user;
 };
 
@@ -198,8 +199,8 @@ struct cy_t
     struct cy_topic_t heartbeat_topic;
     struct cy_sub_t   heartbeat_sub;
 
-    /// All topics are indexed both by name and by subject-ID for fast lookups.
-    struct cy_tree_t* topics_by_name;
+    /// Topics have multiple indexes.
+    struct cy_tree_t* topics_by_hash;
     struct cy_tree_t* topics_by_subject_id;
     struct cy_tree_t* topics_by_gossip_time;
 
@@ -245,8 +246,8 @@ cy_err_t cy_notify_discriminator_collision(struct cy_topic_t* topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
-/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip
-/// allocation.
+/// Pinned topics should not use subject-IDs below CY_ALLOC_SUBJECT_COUNT because the network may have to move them.
+/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation.
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name);
 void cy_topic_destroy(struct cy_topic_t* const topic);
 
@@ -264,16 +265,18 @@ inline bool cy_topic_has_local_subscribers(const struct cy_topic_t* const topic)
     return topic->sub_list != NULL;
 }
 
-/// Topic discriminator is transmitted with every transport frame for subject-ID collision detection.
-/// It is defined as the 32 most significant bits of the topic name hash, while the least significant bits are
+/// Topic discriminator is fused into every transport frame and possibly transfer for subject-ID collision detection.
+/// It is defined as the 51 most significant bits of the topic name hash, while the least significant bits are
 /// used for deterministic subject-ID allocation. The two numbers must be uncorrelated to minimize collisions.
 /// For pinned topics, the discriminator is zero because we don't want to check it for compatibility with old
-/// nodes; this is ensured by our special topic hash function.
-/// Transports are expected to use either the full 32-bit discriminator or any part thereof, depending on
-/// their own design constraints.
-inline uint32_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
+/// nodes; this is ensured by our special topic hash function. Transports are expected to use either the full 51-bit
+/// discriminator or any part thereof (excepting the most significant zero bits ofc), depending on their design.
+///
+/// Given the size of the subject-ID space of 6144 identifiers and 2^51 possible discriminators, the probability of
+/// a collision on a network with 1000 topics is bday(6144*2**51, 1000) ~ 3.6e-14, or one in ~28 trillion.
+inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const topic)
 {
-    return (uint32_t)(topic->hash >> 32U);
+    return topic->hash >> CY_SUBJECT_BITS;
 }
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
