@@ -128,11 +128,11 @@ struct cy_topic_t
     /// full network state discovery is minimized.
     ///
     /// TODO: consider this: what if the network is semi-partitioned where some nodes see a subset of others,
-    /// and our node straddles multiple partitions? This could occur if redundant interfaces are used.
-    /// Our coordinated publishing can naturally settle on a stable state where some nodes become responsible for
-    /// publishing specific topics, and nodes that happen to be in a different partition will never see those topics.
-    /// Do we care about this failure case? What needs analysis is how likely it is for a set of nodes to encounter a
-    /// stable arrangement where each node publishes only a subset of topics.
+    /// and our node straddles multiple partitions? This could occur in packet switched networks or if redundant
+    /// interfaces are used. Our coordinated publishing can naturally settle on a stable state where some nodes
+    /// become responsible for publishing specific topics, and nodes that happen to be in a different partition
+    /// will never see those topics. Do we care about this failure case? What needs analysis is how likely it
+    /// is for a set of nodes to encounter a stable arrangement where each node publishes only a subset of topics.
     uint64_t last_gossip_us;
 
     /// The user can use this field for arbitrary purposes.

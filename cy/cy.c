@@ -9,7 +9,8 @@
 #define BYTE_BITS 8U
 #define BYTE_MAX  0xFFU
 
-#define HEARTBEAT_TOPIC_NAME     "/7509"
+// #define HEARTBEAT_TOPIC_NAME     "/7509"
+#define HEARTBEAT_TOPIC_NAME     "/8191" // TODO FIXME XXX THIS IS ONLY FOR TESTING; the correct name is "/7509"
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
 
 /// If a collision is found, do not gossip the topic if it was last seen less than this long ago.
@@ -315,6 +316,11 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     const struct topic_gossip_t* const gos = &heartbeat.topic_gossip;
     if ((gos->name_length == 0) || (gos->name_length > CY_TOPIC_NAME_MAX)) {
         return; // Malformed message.
+    }
+
+    // Check the kind of the resource. Canonical topic names must begin with a slash.
+    if (gos->name[0] != '/') {
+        return; // Not a topic.
     }
 
     // Find the topic in our local database.
