@@ -8,25 +8,21 @@
 
 #define CY_UDP_IFACE_COUNT_MAX UDPARD_NETWORK_INTERFACE_COUNT_MAX
 
-/// This is used to log and optionally report transient errors that are not fatal.
-/// The occurrences count and the last_error are updated whenever an error is encountered internally.
-struct cy_udp_err_handler_t
-{
-    uint64_t occurrences;
-    cy_err_t last_error;
-    void*    user; ///< Arbitrarily mutable by the user.
-    /// The culprit points to the object that caused the error or is directly related to it.
-    /// The callback may be NULL if error notifications are not needed.
-    void (*callback)(struct cy_udp_err_handler_t* const self, void* const culprit);
-};
-
 struct cy_udp_topic_t
 {
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
     struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
-    struct cy_udp_err_handler_t err_rx_transport;                    ///< Culprit points to this cy_udp_topic_t.
-    struct cy_udp_err_handler_t err_rx_sock[CY_UDP_IFACE_COUNT_MAX]; ///< Culprit points to this cy_udp_topic_t.
+    struct
+    {
+        /// The count of out-of-memory errors that occurred while processing this topic.
+        /// Every OOM implies that either a frame or a full transfer were lost.
+        uint64_t count_oom;
+
+        /// Handler for errors occurring while reading from the socket of this topic. These are platform-specific.
+        /// NULL will suppress socket error handling, which is not recommended.
+        void (*sock_handler[CY_UDP_IFACE_COUNT_MAX])(struct cy_udp_topic_t*, struct udp_rx_handle_t*, int16_t);
+    } rx_err;
 };
 
 struct cy_udp_t
@@ -39,17 +35,23 @@ struct cy_udp_t
 
     struct
     {
-        struct UdpardTx             tx;
-        struct udp_tx_handle_t      tx_sock;
-        uint32_t                    local_iface_address;
-        struct cy_udp_err_handler_t err_tx_sock; ///< Culprit points to this cy_udp_t.
-        uint64_t                    tx_timeout_count;
+        struct UdpardTx        tx;
+        struct udp_tx_handle_t tx_sock;
+        uint32_t               local_iface_address;
+
+        /// Handler for errors occurring while writing into the tx socket. These are platform-specific.
+        /// NULL will suppress socket error handling, which is not recommended.
+        void (*sock_handler)(struct cy_udp_t*, struct udp_tx_handle_t*, int16_t);
+
+        /// Number of tx frames that have timed out while waiting in the queue.
+        uint64_t tx_timeout_count;
     } io[CY_UDP_IFACE_COUNT_MAX];
 
     struct
     {
         size_t mem_allocated_fragments;
         size_t mem_allocated_bytes;
+        size_t mem_oom_count;
     } diag;
 };
 

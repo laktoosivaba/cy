@@ -18,16 +18,6 @@ static uint64_t min_u64(const uint64_t a, const uint64_t b)
     return (a < b) ? a : b;
 }
 
-static void handle_error(struct cy_udp_err_handler_t* const handler, const cy_err_t err, void* const culprit)
-{
-    assert(handler != NULL);
-    handler->occurrences++;
-    handler->last_error = err;
-    if (handler->callback != NULL) {
-        handler->callback(handler, culprit);
-    }
-}
-
 uint64_t cy_udp_now_us(void)
 {
     struct timespec ts;
@@ -41,9 +31,13 @@ static void* mem_alloc(void* const user, const size_t size)
 {
     struct cy_udp_t* const cy_udp = (struct cy_udp_t*)user;
     void* const            out    = malloc(size);
-    if (out != NULL) {
-        cy_udp->diag.mem_allocated_bytes += size;
-        cy_udp->diag.mem_allocated_fragments++;
+    if (size > 0) {
+        if (out != NULL) {
+            cy_udp->diag.mem_allocated_bytes += size;
+            cy_udp->diag.mem_allocated_fragments++;
+        } else {
+            cy_udp->diag.mem_oom_count++;
+        }
     }
     return out;
 }
@@ -224,7 +218,11 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
                         break; // Socket no longer writable, stop sending for now to retry later.
                     }
                     if (send_res < 0) {
-                        handle_error(&cy_udp->io[i].err_tx_sock, send_res, cy_udp);
+                        if (cy_udp->io[i].sock_handler != NULL) {
+                            cy_udp->io[i].sock_handler(cy_udp, &cy_udp->io[i].tx_sock, send_res);
+                        } else {
+                            assert(false); // Unhandled error -- alert debug builds.
+                        }
                     }
                 } else {
                     cy_udp->io[i].tx_timeout_count++;
@@ -236,7 +234,7 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
     }
 }
 
-static void ingest_topic(struct cy_udp_topic_t* const topic, struct UdpardRxTransfer* const transfer)
+static void ingest_topic(struct cy_udp_topic_t* const topic, const struct UdpardRxTransfer* const transfer)
 {
     // TODO: make Cy accept multipart payload so that we don't have to copy the data here.
     bool        payload_freed = false;
@@ -250,7 +248,7 @@ static void ingest_topic(struct cy_udp_topic_t* const topic, struct UdpardRxTran
             udpardRxFragmentFree(transfer->payload, topic->sub.memory.fragment, topic->sub.memory.payload);
             payload_freed = true;
         } else {
-            handle_error(&topic->err_rx_transport, -UDPARD_ERROR_MEMORY, topic);
+            topic->rx_err.count_oom++;
             goto hell;
         }
     }
@@ -358,7 +356,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             .data = cy_udp->mem.allocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE),
         };
         if (NULL == payload.data) {
-            handle_error(&topic->err_rx_transport, -UDPARD_ERROR_MEMORY, topic);
+            topic->rx_err.count_oom++;
             continue;
         }
 
@@ -369,7 +367,11 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);
-            handle_error(&topic->err_rx_sock[iface_index], rx_result, topic);
+            if (topic->rx_err.sock_handler[iface_index] != NULL) {
+                topic->rx_err.sock_handler[iface_index](topic, &topic->sock_rx[iface_index], rx_result);
+            } else {
+                assert(false); // Unhandled error -- alert debug builds.
+            }
             continue;
         }
 
@@ -382,8 +384,10 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
                 ingest_topic(topic, &transfer);
             } else if (er == 0) {
                 (void)0; // Transfer is not yet completed, nothing to do for now.
+            } else if (er == -UDPARD_ERROR_MEMORY) {
+                topic->rx_err.count_oom++;
             } else {
-                handle_error(&topic->err_rx_transport, er, topic);
+                assert(false); // Unreachable -- internal error: unanticipated UDPARD error state (not possible).
             }
         } else { // The subscription was disabled while processing other socket reads. Ignore it.
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);

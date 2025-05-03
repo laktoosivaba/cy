@@ -31,11 +31,12 @@ uint16 VENDOR_ID_PUBLIC = 0xFFFF
 # It is possible to use it in production systems as well, but it is not recommended to avoid conflicts.
 #
 # There is no central management of PID and IID within this vendor; instead, one must generate a random
-# 48-bit number to populate the PID and IID. For example:
+# 48-bit number to populate the PID and IID. For example, using Python:
 #
 #   >>> import random
-#   >>> hex((0xFFFF<<48) | random.getrandbits(48))
+#   >>> my_uid = (0xFFFF<<48) | random.getrandbits(48)
 #
 # Under this random assignment regime, the collision probability given 1 million UIDs is ~0.18%.
+# Software nodes can do this at every run, while hardware nodes must store the UID in ROM.
 
 @sealed
