@@ -39,7 +39,7 @@ extern "C"
 /// This problem could be addressed by the occupancy mask, but it has downsides of its own (does not allow freeing
 /// topics, needs 768 bytes of memory), so we prefer a simpler solution of having to force static topics into the
 /// higher ID range.
-#define CY_ALLOC_SUBJECT_COUNT 6144
+#define CY_TOPIC_SUBJECT_COUNT 6144
 #define CY_SUBJECT_BITS        13U
 #define CY_TOTAL_SUBJECT_COUNT (1UL << CY_SUBJECT_BITS)
 
@@ -66,12 +66,6 @@ struct cy_payload_t
 {
     size_t      size;
     const void* data;
-};
-
-struct cy_payload_mut_t
-{
-    size_t size;
-    void*  data;
 };
 
 struct cy_tree_t
@@ -149,10 +143,10 @@ struct cy_topic_t
     bool                      sub_active;
 };
 
-typedef void (*cy_subscription_callback_t)(struct cy_subscription_t*,
-                                           uint64_t,
-                                           struct cy_transfer_meta_t,
-                                           struct cy_payload_t);
+typedef void (*cy_subscription_callback_t)(struct cy_subscription_t* subscription,
+                                           uint64_t                  timestamp_us,
+                                           struct cy_transfer_meta_t metadata,
+                                           struct cy_payload_t       payload);
 struct cy_subscription_t
 {
     struct cy_subscription_t*  next;

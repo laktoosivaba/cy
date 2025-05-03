@@ -447,7 +447,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->sub_active      = false;
 
     bool ok = (topic->name_len > 0) && (topic->name_len <= CY_TOPIC_NAME_MAX) && //
-              (cy->topic_count < CY_ALLOC_SUBJECT_COUNT);
+              (cy->topic_count < CY_TOPIC_SUBJECT_COUNT);
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.
     if (ok) {
@@ -464,12 +464,12 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     // of pinning the topic in the automatically managed subject-ID range, a conflict may still occur, in which case
     // we will apply the normal allocation logic and unpin the topic to avoid conflict.
     if (ok) {
-        topic->subject_id = (uint16_t)(pinned ? topic->hash : (topic->hash % CY_ALLOC_SUBJECT_COUNT));
+        topic->subject_id = (uint16_t)(pinned ? topic->hash : (topic->hash % CY_TOPIC_SUBJECT_COUNT));
         while (&topic->index_subject_id != cavlSearch(&cy->topics_by_subject_id, // until inserted
                                                       topic,
                                                       &cavl_predicate_topic_subject_id,
                                                       &cavl_factory_topic_subject_id)) {
-            topic->subject_id = (topic->subject_id + 1U) % CY_ALLOC_SUBJECT_COUNT;
+            topic->subject_id = (topic->subject_id + 1U) % CY_TOPIC_SUBJECT_COUNT;
         }
         assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     }
