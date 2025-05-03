@@ -98,15 +98,16 @@ typedef void (*cy_transport_unsubscribe_t)(struct cy_topic_t*);
 
 struct cy_topic_t
 {
-    struct cy_tree_t index_hash;
+    struct cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
     struct cy_tree_t index_subject_id;
     struct cy_tree_t index_gossip_time;
 
     struct cy_t* cy;
 
     /// The name is always null-terminated. We keep the size for convenience as well.
-    size_t name_len;
+    size_t name_length;
     char   name[CY_TOPIC_NAME_MAX + 1];
+
     /// Assuming we have 1000 topics, the probability of a topic name hash collision is:
     /// >>> from decimal import Decimal
     /// >>> n = 1000
@@ -118,14 +119,20 @@ struct cy_topic_t
     /// This ensures that the preferred subject-ID is still found using (hash % CY_ALLOC_SUBJECT_COUNT);
     /// also, it ensures that the discriminator (hash >> CY_SUBJECT_BITS) is zero, thus disabling its check.
     uint64_t hash;
-
-    uint16_t subject_id;
     uint64_t lamport_clock;
     uint64_t owner_uid; ///< Zero is not a valid UID.
+    uint16_t subject_id;
 
     /// Updated whenever the topic is gossiped or its gossip is received from another node.
     /// It allows us to optimally decide which topic to gossip next such that redundant traffic and the time to
     /// full network state discovery is minimized.
+    ///
+    /// TODO: consider this: what if the network is semi-partitioned where some nodes see a subset of others,
+    /// and our node straddles multiple partitions? This could occur if redundant interfaces are used.
+    /// Our coordinated publishing can naturally settle on a stable state where some nodes become responsible for
+    /// publishing specific topics, and nodes that happen to be in a different partition will never see those topics.
+    /// Do we care about this failure case? What needs analysis is how likely it is for a set of nodes to encounter a
+    /// stable arrangement where each node publishes only a subset of topics.
     uint64_t last_gossip_us;
 
     /// The user can use this field for arbitrary purposes.
@@ -172,7 +179,7 @@ struct cy_t
     void* user;
 
     /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
-    size_t namespace_len;
+    size_t namespace_length;
     char   namespace_[CY_NAMESPACE_NAME_MAX + 1];
 
     cy_now_t now;
