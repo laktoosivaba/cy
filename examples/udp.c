@@ -18,6 +18,7 @@
 #include <poll.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
 
 /// This is the value recommended by the Cyphal/UDP specification.
 #define OVERRIDE_TTL 16
@@ -34,10 +35,10 @@ int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_ifa
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0)) {
-        self->fd                 = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        uint32_t  local_iface_be = htonl(local_iface_address);
-        const int ttl            = OVERRIDE_TTL;
-        bool      ok             = self->fd >= 0;
+        self->fd                      = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        const uint32_t local_iface_be = htonl(local_iface_address);
+        const int      ttl            = OVERRIDE_TTL;
+        bool           ok             = self->fd >= 0;
         //
         ok = ok && bind(self->fd,
                         (struct sockaddr*)&(struct sockaddr_in){

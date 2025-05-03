@@ -12,6 +12,8 @@
       <w>libcanard</w>
       <w>libserard</w>
       <w>libudpard</w>
+      <w>opencyphal</w>
+      <w>reuseport</w>
       <w>tfer</w>
       <w>udpard</w>
       <w>usec</w>
