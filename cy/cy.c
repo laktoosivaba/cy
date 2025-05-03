@@ -227,8 +227,6 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic)
     // Publish the message.
     const cy_err_t pub_res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
     cy->heartbeat_topic->pub_transfer_id++;
-    // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
-    cy->heartbeat_next_us += cy->heartbeat_period_us; // Do not accumulate heartbeat phase shift!
 
     // Update the gossip time index, even if the publication failed, to ensure we don't get stuck publishing
     // the same gossip if error reporting is broken.
@@ -364,38 +362,34 @@ cy_err_t cy_new(struct cy_t* const               cy,
     return res;
 }
 
-cy_err_t cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
+void cy_ingest(struct cy_topic_t* const        topic,
+               const uint64_t                  timestamp_us,
+               const struct cy_transfer_meta_t metadata,
+               const struct cy_payload_t       payload)
 {
-    assert(cy != NULL);
-
-    if (evt != NULL) {
-        assert(evt->topic != NULL);
-        assert(evt->topic->cy == cy);
-        // The transport layer is responsible for comparing the topic discriminator.
-        // If we got something here, the discriminator must be correct.
-        struct cy_subscription_t* sub = evt->topic->sub_list;
-        while (sub != NULL) {
-            assert(sub->topic == evt->topic);
-            struct cy_subscription_t* const next = sub->next; // In case the callback deletes this subscription.
-            if (sub->callback != NULL) {
-                sub->callback(sub, evt->ts_us, evt->transfer, evt->payload);
-            }
-            sub = next;
+    assert(topic != NULL);
+    struct cy_subscription_t* sub = topic->sub_list;
+    while (sub != NULL) {
+        assert(sub->topic == topic);
+        struct cy_subscription_t* const next = sub->next; // In case the callback deletes this subscription.
+        if (sub->callback != NULL) {
+            sub->callback(sub, timestamp_us, metadata, payload);
         }
+        sub = next;
     }
+}
 
+cy_err_t cy_update(struct cy_t* const cy)
+{
     cy_err_t res = 0;
-
-    /// This is te only place where we publish the heartbeats. The handler above could have invoked on_heartbeat();
-    /// if that happened, it could have rescheduled the next topic to gossip, which is why we have to do this after
-    /// the incoming transfer is handled, not before.
-    const uint64_t now = cy->now(cy);
-    if (now >= cy->heartbeat_next_us) {
+    if (cy->now(cy) >= cy->heartbeat_next_us) {
         const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
         assert(t != NULL); // We always have at least the heartbeat topic.
         struct cy_topic_t* const x = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
         assert(x->cy == cy);
         res = publish_heartbeat(x);
+        // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
+        cy->heartbeat_next_us += cy->heartbeat_period_us; // Do not accumulate heartbeat phase slip!
     }
     return res;
 }
@@ -437,7 +431,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->last_gossip_us = pinned ? cy->now(cy) : 0;
 
     // Declare ourselves as the owner of the topic. We may get kicked out later if there's a collision and we lose.
-    topic->crdt_meta.lamport_clock = 1;
+    topic->crdt_meta.lamport_clock = 1; // By convention, the first valid record starts at 1.
     topic->crdt_meta.owner_uid     = topic->cy->uid;
 
     topic->user            = NULL;

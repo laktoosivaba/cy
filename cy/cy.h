@@ -227,21 +227,29 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const cy_transport_unsubscribe_t unsubscribe);
 void     cy_destroy(struct cy_t* const cy);
 
-/// cy_update() is invoked whenever a new transfer is received; if no transfers are received in the heartbeat period,
-/// the function must be invoked with null event. It is safe to invoke it with NULL events at any higher rate as well
-/// -- the library regulates the rates internally; the only constraint is that the period MUST NOT EXCEED the
-/// heartbeat period. To avoid frequency aliasing, one may prefer to invoke it at a higher rate; a few ms is good.
+/// This is invoked whenever a new transfer on the topic is received.
+/// The library will dispatch it to the appropriate subscriber callbacks.
+/// Excluding the callbacks, the time complexity is constant.
+///
+/// If this is invoked together with cy_update(), then cy_ingest() must be invoked BEFORE cy_update() to ensure that the
+/// latest state updates are reflected in the next heartbeat message.
+void cy_ingest(struct cy_topic_t* const        topic,
+               const uint64_t                  timestamp_us,
+               const struct cy_transfer_meta_t metadata,
+               const struct cy_payload_t       payload);
+
+/// This function must be invoked periodically to let the library publish heartbeats.
+/// The invocation period MUST NOT EXCEED the heartbeat period configured in cy_t; there is no lower limit.
+/// To avoid frequency aliasing, one may prefer to invoke it at any higher rate; a few ms is good.
 ///
 /// This is the only function that generates heartbeat --- the only kind of auxiliary traffic needed to support
-/// named topics. The returned value indicates the success of the heartbeat publication, if any took place.
-struct cy_update_event_t
-{
-    struct cy_topic_t*        topic; ///< Topic associated with the transport subscription by the lib*ards.
-    uint64_t                  ts_us;
-    struct cy_transfer_meta_t transfer;
-    struct cy_payload_t       payload;
-};
-cy_err_t cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt);
+/// named topics. The returned value indicates the success of the heartbeat publication, if any took place, or zero.
+///
+/// If this is invoked together with cy_ingest(), then cy_update() must be invoked AFTER cy_ingest() to ensure that the
+/// latest state updates are reflected in the heartbeat message.
+///
+/// Excluding the transport_publish dependency, the time complexity is logarithmic in the number of topics.
+cy_err_t cy_update(struct cy_t* const cy);
 
 /// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the
 /// problem. Transport frames with mismatched discriminators must be dropped; no processing at the transport layer
@@ -249,7 +257,7 @@ cy_err_t cy_update(struct cy_t* const cy, const struct cy_update_event_t* const 
 ///
 /// The function will not perform any IO and will return immediately after quickly updating an internal state.
 /// It is thus safe to invoke it from a deep callback or from deep inside the transport library; the side effects
-/// are confined to the Cy state only.
+/// are confined to the Cy state only. The time complexity is logarithmic in the number of topics.
 ///
 /// If the transport library is unable to efficiently find the topic when a collision is found, use
 /// cy_topic_find_by_subject_id(). The function has no effect if the topic is NULL; it is not an error to call it

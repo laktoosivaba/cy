@@ -25,8 +25,8 @@ struct cy_udp_topic_t
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
     struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
-    struct cy_udp_err_handler_t err_udpard_rx;                    ///< Culprit points to this cy_udp_topic_t.
-    struct cy_udp_err_handler_t err_sock[CY_UDP_IFACE_COUNT_MAX]; ///< Culprit points to this cy_udp_topic_t.
+    struct cy_udp_err_handler_t err_rx_transport;                    ///< Culprit points to this cy_udp_topic_t.
+    struct cy_udp_err_handler_t err_rx_sock[CY_UDP_IFACE_COUNT_MAX]; ///< Culprit points to this cy_udp_topic_t.
 };
 
 struct cy_udp_t
@@ -42,7 +42,7 @@ struct cy_udp_t
         struct UdpardTx             tx;
         struct udp_tx_handle_t      tx_sock;
         uint32_t                    local_iface_address;
-        struct cy_udp_err_handler_t err_sock; ///< Culprit points to this cy_udp_t.
+        struct cy_udp_err_handler_t err_tx_sock; ///< Culprit points to this cy_udp_t.
         uint64_t                    tx_timeout_count;
     } io[CY_UDP_IFACE_COUNT_MAX];
 
