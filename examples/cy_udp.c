@@ -1,4 +1,4 @@
-/// Copyright (c) Pavel Kirienko
+/// Copyright (c) Pavel Kirienko <pavel@opencyphal.org>
 
 #include "cy_udp.h"
 #include <assert.h>

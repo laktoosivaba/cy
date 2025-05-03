@@ -1,4 +1,4 @@
-/// Copyright (c) Pavel Kirienko
+/// Copyright (c) Pavel Kirienko <pavel@opencyphal.org>
 
 #include "cy.h"
 #include "_cy_cavl.h"
@@ -293,6 +293,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
     return pub_res;
 }
 
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 static void on_heartbeat(struct cy_subscription_t* const sub,
                          const uint64_t                  ts_us,
                          const struct cy_transfer_meta_t transfer,
@@ -316,7 +317,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         return; // Malformed message.
     }
 
-    // Compute the topic hash and find the topic in our local database.
+    // Find the topic in our local database.
     struct cy_t* const cy    = sub->topic->cy;
     struct cy_topic_t* topic = cy_topic_find_by_name(cy, gos->name);
     if (topic == NULL) { // We don't know this topic, but we still need to check for a subject-ID collision.
