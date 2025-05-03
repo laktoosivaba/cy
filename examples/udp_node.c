@@ -43,7 +43,7 @@ int main(const int argc, const char* const argv[])
     const size_t tx_queue_capacity_per_iface = 1000;
 
     struct cy_udp_t cy_udp;
-    const cy_err_t  res = cy_udp_new(&cy_udp, uid, NULL, local_iface_address, tx_queue_capacity_per_iface, NULL);
+    const cy_err_t  res = cy_udp_new(&cy_udp, uid, NULL, local_iface_address, tx_queue_capacity_per_iface);
     printf("cy_udp_new: %d\n", res);
 
     // TODO: print statistics at the end, including transfer-IDs of all topics.

@@ -8,13 +8,25 @@
 
 #define CY_UDP_IFACE_COUNT_MAX UDPARD_NETWORK_INTERFACE_COUNT_MAX
 
+/// This is used to log and optionally report transient errors that are not fatal.
+/// The occurrences count and the last_error are updated whenever an error is encountered internally.
+struct cy_udp_err_handler_t
+{
+    uint64_t occurrences;
+    cy_err_t last_error;
+    void*    user; ///< Arbitrarily mutable by the user.
+    /// The culprit points to the object that caused the error or is directly related to it.
+    /// The callback may be NULL if error notifications are not needed.
+    void (*callback)(struct cy_udp_err_handler_t* const self, void* const culprit);
+};
+
 struct cy_udp_topic_t
 {
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
     struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
-    struct cy_err_handler_t     err_udpard_rx;                    ///< Culprit points to this cy_udp_topic_t.
-    struct cy_err_handler_t     err_sock[CY_UDP_IFACE_COUNT_MAX]; ///< Culprit points to this cy_udp_topic_t.
+    struct cy_udp_err_handler_t err_udpard_rx;                    ///< Culprit points to this cy_udp_topic_t.
+    struct cy_udp_err_handler_t err_sock[CY_UDP_IFACE_COUNT_MAX]; ///< Culprit points to this cy_udp_topic_t.
 };
 
 struct cy_udp_t
@@ -27,11 +39,11 @@ struct cy_udp_t
 
     struct
     {
-        struct UdpardTx         tx;
-        struct udp_tx_handle_t  tx_sock;
-        uint32_t                local_iface_address;
-        struct cy_err_handler_t err_sock; ///< Culprit points to this cy_udp_t.
-        uint64_t                tx_timeout_count;
+        struct UdpardTx             tx;
+        struct udp_tx_handle_t      tx_sock;
+        uint32_t                    local_iface_address;
+        struct cy_udp_err_handler_t err_sock; ///< Culprit points to this cy_udp_t.
+        uint64_t                    tx_timeout_count;
     } io[CY_UDP_IFACE_COUNT_MAX];
 
     struct
@@ -52,12 +64,11 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const uint64_t         uid,
                     const char* const      namespace_,
                     const uint32_t         local_iface_address[CY_UDP_IFACE_COUNT_MAX],
-                    const size_t           tx_queue_capacity_per_iface,
-                    void* const            user);
+                    const size_t           tx_queue_capacity_per_iface);
 
 /// Wait for events (blocking), process them, and return. Invoke this in a tight superloop to keep the system alive.
-/// The function is guaranteed to return no later than in CY_UPDATE_INTERVAL_MIN_us.
-cy_err_t cy_udp_wait_once(struct cy_udp_t* const cy_udp);
+/// The function is guaranteed to return no later than in the heartbeat period, as configured in the Cy instance.
+cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp);
 
 /// Keep running the event loop until the deadline is reached or until the first error.
 /// If the deadline is not in the future, the function will process pending events once and return without blocking.

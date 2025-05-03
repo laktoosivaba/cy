@@ -10,7 +10,6 @@
 #define BYTE_MAX  0xFFU
 
 #define HEARTBEAT_TOPIC_NAME     "/7509"
-#define HEARTBEAT_PUB_PERIOD_us  CY_UPDATE_INTERVAL_MIN_us
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
 
 /// If a collision is found, do not gossip the topic if it was last seen less than this long ago.
@@ -162,16 +161,6 @@ static size_t smaller(const size_t a, const size_t b)
     return (a < b) ? a : b;
 }
 
-static void handle_error(struct cy_err_handler_t* const handler, const cy_err_t err, void* const culprit)
-{
-    assert(handler != NULL);
-    handler->occurrences++;
-    handler->last_error = err;
-    if (handler->callback != NULL) {
-        handler->callback(handler, culprit);
-    }
-}
-
 struct topic_gossip_t
 {
     struct cy_crdt_meta_t crdt_meta;
@@ -220,7 +209,7 @@ static size_t get_heartbeat_size(const struct heartbeat_t* const obj)
     return sizeof(*obj) - (CY_TOPIC_NAME_MAX - obj->topic_gossip.name_length);
 }
 
-static void gossip(struct cy_topic_t* const topic)
+static cy_err_t publish_heartbeat(struct cy_topic_t* const topic)
 {
     assert(topic != NULL);
     struct cy_t* const cy = topic->cy;
@@ -238,11 +227,8 @@ static void gossip(struct cy_topic_t* const topic)
     // Publish the message.
     const cy_err_t pub_res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
     cy->heartbeat_topic->pub_transfer_id++;
-    if (pub_res >= 0) {
-        cy->heartbeat_last_us = now;
-    } else {
-        handle_error(&cy->err_heartbeat_pub, pub_res, topic);
-    }
+    // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
+    cy->heartbeat_next_us += cy->heartbeat_period_us; // Do not accumulate heartbeat phase shift!
 
     // Update the gossip time index, even if the publication failed, to ensure we don't get stuck publishing
     // the same gossip if error reporting is broken.
@@ -253,6 +239,7 @@ static void gossip(struct cy_topic_t* const topic)
           &cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
         assert(tree == &topic->index_gossip_time);
     }
+    return pub_res;
 }
 
 static void on_heartbeat(struct cy_subscription_t* const sub,
@@ -323,8 +310,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
-                const cy_transport_unsubscribe_t unsubscribe,
-                void* const                      user)
+                const cy_transport_unsubscribe_t unsubscribe)
 {
     assert(cy != NULL);
     assert(uid != 0);
@@ -346,7 +332,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
         cy->namespace_[0] = '~';
         cy->namespace_[1] = '\0';
     }
-    cy->user                  = user;
+    cy->user                  = NULL;
     cy->now                   = now;
     cy->transport_publish     = publish;
     cy->transport_subscribe   = subscribe;
@@ -360,7 +346,11 @@ cy_err_t cy_new(struct cy_t* const               cy,
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
-    // Register the heartbeat topic and subscribe. This is a pinned topic so no network exchange will take place.
+    // We want to publish our heartbeat ASAP to speed up network convergence.
+    cy->heartbeat_next_us   = cy->started_at_us;
+    cy->heartbeat_period_us = CY_HEARTBEAT_PERIOD_DEFAULT_us;
+
+    // Register the heartbeat topic and subscribe to it.
     const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
     assert(topic_ok);
     const cy_err_t res = cy_subscribe(cy->heartbeat_topic,
@@ -374,7 +364,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
     return res;
 }
 
-void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
+cy_err_t cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
 {
     assert(cy != NULL);
 
@@ -394,26 +384,32 @@ void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt)
         }
     }
 
-    /// We could have transmitted a heartbeat in response to someone asking for an allocation,
-    /// or our own proposal, or as a corrective entry if a conflict is found.
-    /// If that happened, we don't want to transmit another heartbeat immediately to regulate the traffic.
-    /// This is why we check for the time here at the end, after the incoming transfer is handled.
-    if ((cy->now(cy) - cy->heartbeat_last_us) >= HEARTBEAT_PUB_PERIOD_us) {
+    cy_err_t res = 0;
+
+    /// This is te only place where we publish the heartbeats. The handler above could have invoked on_heartbeat();
+    /// if that happened, it could have rescheduled the next topic to gossip, which is why we have to do this after
+    /// the incoming transfer is handled, not before.
+    const uint64_t now = cy->now(cy);
+    if (now >= cy->heartbeat_next_us) {
         const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
         assert(t != NULL); // We always have at least the heartbeat topic.
         struct cy_topic_t* const x = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
         assert(x->cy == cy);
-        gossip(x);
+        res = publish_heartbeat(x);
     }
+    return res;
 }
 
-void cy_notify_discriminator_collision(struct cy_topic_t* topic)
+void cy_notify_discriminator_collision(struct cy_topic_t* const topic)
 {
-    assert((topic != NULL) && (topic->cy != NULL));
-    const uint64_t now = topic->cy->now(topic->cy);
-    if ((now - topic->last_gossip_us) >= GOSSIP_RATE_LIMIT_us) {
-        gossip(topic);
-        assert(topic->last_gossip_us >= now);
+    // Schedule the topic for gossiping ASAP, unless it is already scheduled.
+    if ((topic != NULL) && (topic->last_gossip_us > 0)) {
+        struct cy_tree_t** const index = &topic->cy->topics_by_gossip_time;
+        cavlRemove(index, &topic->index_gossip_time);
+        topic->last_gossip_us = 0; // Topics with the same time will be ordered FIFO -- the tree is stable.
+        (void)cavlSearch(index, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
+        // We could subtract the heartbeat period from the next heartbeat time to make it come out sooner,
+        // but this way we would generate unpredictable network loading. We probably don't want that.
     }
 }
 
@@ -431,10 +427,18 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->name_len = strlen(name);
     memcpy(topic->name, name, smaller(topic->name_len, CY_TOPIC_NAME_MAX));
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
-    topic->hash                    = topic_hash(name, &topic->pinned);
+    bool pinned                    = false;
+    topic->hash                    = topic_hash(name, &pinned);
 
-    topic->crdt_meta.lamport_clock = 0;
-    topic->crdt_meta.owner_uid     = 0;
+    /// Schedule the first gossiping time with a simple optimization.
+    /// If this is an ordinary topic, we want this to happen ASAP to minimize collisions.
+    /// If this is a pinned topic, we can deprioritize it because we are not responsible for collision resolution
+    /// and we don't want to delay the other topics.
+    topic->last_gossip_us = pinned ? cy->now(cy) : 0;
+
+    // Declare ourselves as the owner of the topic. We may get kicked out later if there's a collision and we lose.
+    topic->crdt_meta.lamport_clock = 1;
+    topic->crdt_meta.owner_uid     = topic->cy->uid;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
@@ -467,16 +471,9 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     }
 
     // Insert into gossip time index tree; this is a non-unique index.
-    // Notify the peers that we have a new topic, allowing anyone to object if a conflict is found.
     if (ok) {
-        (void)cavlSearch(&cy->topics_by_gossip_time, // just to make the removal operation well-defined
-                         topic,
-                         &cavl_predicate_topic_gossip_time,
-                         &cavl_factory_topic_gossip_time);
-        topic->crdt_meta.lamport_clock++;
-        topic->crdt_meta.owner_uid = topic->cy->uid;
-        gossip(topic);
-        assert(topic->last_gossip_us > 0);
+        (void)cavlSearch(
+          &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
     }
 
     cy->topic_count += ok ? 1 : 0;
@@ -580,6 +577,6 @@ cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_u
     assert((topic->name_len > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
     const cy_err_t res = topic->cy->transport_publish(topic, tx_deadline_us, payload);
-    topic->pub_transfer_id++; // The transfer-ID is always incremented, even on failure, to signal lost messages.
+    topic->pub_transfer_id++;
     return res;
 }

@@ -18,7 +18,7 @@ static uint64_t min_u64(const uint64_t a, const uint64_t b)
     return (a < b) ? a : b;
 }
 
-static void handle_error(struct cy_err_handler_t* const handler, const cy_err_t err, void* const culprit)
+static void handle_error(struct cy_udp_err_handler_t* const handler, const cy_err_t err, void* const culprit)
 {
     assert(handler != NULL);
     handler->occurrences++;
@@ -139,8 +139,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const uint64_t         uid,
                     const char* const      namespace_,
                     const uint32_t         local_iface_address[CY_UDP_IFACE_COUNT_MAX],
-                    const size_t           tx_queue_capacity_per_iface,
-                    void* const            user)
+                    const size_t           tx_queue_capacity_per_iface)
 {
     assert(cy_udp != NULL);
     memset(cy_udp, 0, sizeof(*cy_udp));
@@ -178,8 +177,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
         }
     }
 
-    // Remember that cy_new may emit transfers, so we have to have the bottom part of the stack ready!
-    // Cy is initialized in the last order.
+    // Initialize Cy. It will not emit any transfers; this only happens from cy_update() and cy_publish().
     if (res >= 0) {
         res = cy_new(&cy_udp->base,
                      uid,
@@ -188,8 +186,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                      &now_us,
                      &transport_publish,
                      &transport_subscribe,
-                     &transport_unsubscribe,
-                     user);
+                     &transport_unsubscribe);
     }
 
     // Cleanup on error.
@@ -271,7 +268,8 @@ static int_fast8_t udpard_receive_topic(const uint64_t                          
             void* const dest   = malloc(transfer.payload_size);
             event.payload.data = dest;
             if (dest != NULL) {
-                udpardGather(transfer.payload, payload.size, payload.data);
+                const size_t sz = udpardGather(transfer.payload, transfer.payload_size, dest);
+                assert(sz == transfer.payload_size);
             } else {
                 out = -UDPARD_ERROR_MEMORY;
             }
@@ -425,20 +423,18 @@ hell:
     return res;
 }
 
-cy_err_t cy_udp_wait_once(struct cy_udp_t* const cy_udp)
+cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp)
 {
     assert(cy_udp != NULL);
-    return spin_once_until(cy_udp, cy_udp_now_us() + CY_UPDATE_INTERVAL_MIN_us);
+    return spin_once_until(cy_udp, cy_udp->base.heartbeat_next_us);
 }
 
 cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us)
 {
     cy_err_t res = 0;
     while (res >= 0) {
-        const uint64_t now      = cy_udp_now_us();
-        const uint64_t deadline = min_u64(deadline_us, now + CY_UPDATE_INTERVAL_MIN_us);
-        res                     = spin_once_until(cy_udp, deadline);
-        if (deadline <= now) {
+        res = spin_once_until(cy_udp, min_u64(deadline_us, cy_udp->base.heartbeat_next_us));
+        if (deadline_us <= cy_udp_now_us()) {
             break;
         }
     }

@@ -21,8 +21,9 @@ extern "C"
 /// If not sure, use this value for the transfer-ID timeout.
 #define CY_TRANSFER_ID_TIMEOUT_DEFAULT_us 2000000UL
 
-/// The recommended minimum update interval.
-#define CY_UPDATE_INTERVAL_MIN_us 200000UL
+/// The rate at which the heartbeat topic is published is also the absolute minimum library state update interval.
+/// It is not an error to update it more often, and in fact it is desirable to reduce possible frequency aliasing.
+#define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000UL
 
 #define CY_TOPIC_TTL_DEFAULT_us (3600U * 1000000UL)
 
@@ -47,7 +48,6 @@ typedef int32_t cy_err_t;
 
 struct cy_t;
 struct cy_topic_t;
-struct cy_err_handler_t;
 
 enum cy_prio_t
 {
@@ -87,7 +87,8 @@ struct cy_transfer_meta_t
     uint64_t       transfer_id;
 };
 
-/// Returns the current monotonic time in microseconds.
+/// Returns the current monotonic time in microseconds. The initial time may be arbitrary (doesn't have to be zero).
+/// The returned value may be zero initially, but all subsequent calls must return strictly positive values.
 typedef uint64_t (*cy_now_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
@@ -132,15 +133,10 @@ struct cy_topic_t
 
     uint16_t subject_id;
 
-    /// Updated with the current time when a gossip is either sent or received. Thus, this is the time when the
-    /// network last saw the topic. It allows us to optimally decide which topic to gossip next such that redundant
-    /// traffic is minimized and the time to full topic discovery is minimized.
+    /// Updated whenever the topic is gossiped or its gossip is received from another node.
+    /// It allows us to optimally decide which topic to gossip next such that redundant traffic and the time to
+    /// full network state discovery is minimized.
     uint64_t last_gossip_us;
-
-    /// True if the ID is assigned directly; e.g., "/7509".
-    /// Pinned topics have zero discriminator for compatibility with old v1 nodes.
-    /// Pinned topics should reside above CY_ALLOC_SUBJECT_COUNT; otherwise, the network may have to move them.
-    bool pinned;
 
     struct cy_crdt_meta_t crdt_meta;
 
@@ -165,29 +161,15 @@ typedef void (*cy_subscription_callback_t)(struct cy_subscription_t*,
                                            struct cy_payload_t);
 struct cy_subscription_t
 {
-    struct cy_subscription_t* next;
-    struct cy_topic_t*        topic;
-    cy_subscription_callback_t
-          callback; ///< Maybe NULL; may be changed by the user at any time (e.g. to implement FSM).
-    void* user;
+    struct cy_subscription_t*  next;
+    struct cy_topic_t*         topic;
+    cy_subscription_callback_t callback; ///< Maybe NULL; may be changed at any time (e.g. to implement FSM).
+    void*                      user;
 };
 
-/// The culprit points to the object that caused the error or is directly related to it.
-/// The specifics are documented at the place of use.
-/// The callback pointer may be NULL if error notifications are not needed; this is not recommended, however.
-typedef void (*cy_err_callback_t)(struct cy_err_handler_t* const self, void* const culprit);
-
-/// This is used to log and optionally report transient errors that are not fatal.
-/// The occurrences count and the last_error are updated whenever an error is encountered internally.
-/// If the callback is not NULL, it is invoked afterward.
-struct cy_err_handler_t
-{
-    uint64_t          occurrences;
-    cy_err_t          last_error;
-    void*             user; ///< Arbitrarily mutable by the user.
-    cy_err_callback_t callback;
-};
-
+/// There are only two functions whose invocations may result in network traffic:
+///     - cy_update()  -- heartbeat only, at most one per call, at the specified fixed rate.
+///     - cy_publish() -- user-defined topics.
 struct cy_t
 {
     /// The UID is actually composed of 16-bit vendor-ID, 16-bit product-ID, and 32-bit instance-ID (aka serial
@@ -216,11 +198,8 @@ struct cy_t
     /// Heartbeat topic and related items.
     struct cy_topic_t*       heartbeat_topic;
     struct cy_subscription_t heartbeat_sub;
-    uint64_t                 heartbeat_last_us;
-
-    /// The callback culprit pointer points to the topic whose metadata was being gossiped when the error occurred.
-    /// If necessary, the topic has a back-reference to the cy_t instance.
-    struct cy_err_handler_t err_heartbeat_pub;
+    uint64_t                 heartbeat_next_us;
+    uint64_t                 heartbeat_period_us; ///< Can be adjusted by the user. Prefer larger period on CAN.
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;
@@ -237,10 +216,7 @@ struct cy_t
 /// this is the only topic that is needed by Cy itself. It will be initialized and managed automatically; if necessary,
 /// the user can add additional subscriptions to it later.
 ///
-/// The function will immediately publish a heartbeat message and setup a heartbeat subscription.
-/// Heartbeat errors are considered transient; as such, they are only reported via err_heartbeat_pub.
-/// After the function returns, the user should configure the error callback and check if there are any errors
-/// that may have occurred before the callback was set.
+/// No network traffic will be generated. The only function that can send heartbeat messages is cy_update().
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
@@ -248,14 +224,16 @@ cy_err_t cy_new(struct cy_t* const               cy,
                 const cy_now_t                   now,
                 const cy_transport_publish_t     publish,
                 const cy_transport_subscribe_t   subscribe,
-                const cy_transport_unsubscribe_t unsubscribe,
-                void* const                      user);
+                const cy_transport_unsubscribe_t unsubscribe);
 void     cy_destroy(struct cy_t* const cy);
 
-/// cy_update() shall be invoked whenever a new transfer is received; if no transfers are received in approx. 200
-/// ms, the function must be invoked with null event. The invocation frequency SHALL NOT be lower than 1 Hz.
-/// The function is considered infallible because gossip errors are not considered significant and are reported via
-/// the heartbeat_publication_err_handler.
+/// cy_update() is invoked whenever a new transfer is received; if no transfers are received in the heartbeat period,
+/// the function must be invoked with null event. It is safe to invoke it with NULL events at any higher rate as well
+/// -- the library regulates the rates internally; the only constraint is that the period MUST NOT EXCEED the
+/// heartbeat period. To avoid frequency aliasing, one may prefer to invoke it at a higher rate; a few ms is good.
+///
+/// This is the only function that generates heartbeat --- the only kind of auxiliary traffic needed to support
+/// named topics. The returned value indicates the success of the heartbeat publication, if any took place.
 struct cy_update_event_t
 {
     struct cy_topic_t*        topic; ///< Topic associated with the transport subscription by the lib*ards.
@@ -263,23 +241,26 @@ struct cy_update_event_t
     struct cy_transfer_meta_t transfer;
     struct cy_payload_t       payload;
 };
-void cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt);
+cy_err_t cy_update(struct cy_t* const cy, const struct cy_update_event_t* const evt);
 
 /// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the
 /// problem. Transport frames with mismatched discriminators must be dropped; no processing at the transport layer
-/// is needed. The function may emit one transfer; the result of the emission is returned. Transient errors can be
-/// safely ignored.
+/// is needed. This function is not essential for the protocol to function, but it speeds up collision repair.
 ///
-/// If the transport library is unable to efficiently find the topic when a collision is found,
-/// use cy_topic_find_by_subject_id().
-/// The function has no effect if the topic is NULL; it is not an error to call it with NULL to simplify chaining
-/// like:
-///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_id));
-void cy_notify_discriminator_collision(struct cy_topic_t* topic);
+/// The function will not perform any IO and will return immediately after quickly updating an internal state.
+/// It is thus safe to invoke it from a deep callback or from deep inside the transport library; the side effects
+/// are confined to the Cy state only.
+///
+/// If the transport library is unable to efficiently find the topic when a collision is found, use
+/// cy_topic_find_by_subject_id(). The function has no effect if the topic is NULL; it is not an error to call it
+/// with NULL to simplify chaining like:
+///     cy_notify_discriminator_collision(cy_topic_find_by_subject_id(cy, collision_subject_id));
+void cy_notify_discriminator_collision(struct cy_topic_t* const topic);
 
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
 /// Pinned topics should not use subject-IDs below CY_ALLOC_SUBJECT_COUNT because the network may have to move them.
+/// No network traffic is generated here.
 /// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation.
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name);
 void cy_topic_destroy(struct cy_topic_t* const topic);
@@ -338,6 +319,9 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
                       const cy_subscription_callback_t callback);
 void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t* const sub);
 
+/// The transfer-ID is always incremented, even on failure, to signal lost messages.
+/// Therefore, the transfer-ID is effectively the number of times this function was called on the topic.
+/// This function always publishes only one transfer as requested; no auxiliary traffic is generated.
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
 
 #ifdef __cplusplus
