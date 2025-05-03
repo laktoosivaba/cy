@@ -188,7 +188,7 @@ static struct heartbeat_t make_heartbeat(const uint64_t              uptime_us,
                                          const char* const           crdt_name)
 {
     struct heartbeat_t obj = {
-        .uptime = (uint32_t)(uptime_us / 1000U),
+        .uptime = (uint32_t)(uptime_us / 1000000U),
         .uid = uid,
         .topic_gossip =
             {
@@ -248,7 +248,9 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     assert(sub != NULL);
     assert(payload.data != NULL);
     assert(payload.size <= sizeof(struct heartbeat_t));
-    assert(payload.size >= (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX));
+    if (payload.size < (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX)) {
+        return; // This is an old uavcan.node.Heartbeat.1 message, ignore it because it has no CRDT gossip data.
+    }
 
     (void)sub;
     (void)transfer;
@@ -453,8 +455,12 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
 
     // Allocate a subject-ID for the topic and insert it into the subject index tree.
     // The CAVL library has a convenient "find or create" function that suits this purpose perfectly.
+    // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
+    // meaning that another pinned topic is not occupying the same subject-ID. However, if the user made the mistake
+    // of pinning the topic in the automatically managed subject-ID range, a conflict may still occur, in which case
+    // we will apply the normal allocation logic and unpin the topic to avoid conflict.
     if (ok) {
-        topic->subject_id = (uint16_t)(topic->hash % CY_ALLOC_SUBJECT_COUNT);
+        topic->subject_id = (uint16_t)(pinned ? topic->hash : (topic->hash % CY_ALLOC_SUBJECT_COUNT));
         while (&topic->index_subject_id != cavlSearch(&cy->topics_by_subject_id, // until inserted
                                                       topic,
                                                       &cavl_predicate_topic_subject_id,
