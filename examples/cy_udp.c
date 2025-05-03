@@ -332,7 +332,8 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     cy_topic_for_each(&cy_udp->base, &on_topic_for_each, &rx_ctx);
 
     // Do a blocking wait.
-    cy_err_t res = udp_wait(deadline_us, tx_count, tx_await, rx_ctx.count, rx_await);
+    const uint64_t wait_timeout = deadline_us - min_u64(cy_udp_now_us(), deadline_us);
+    cy_err_t       res          = udp_wait(wait_timeout, tx_count, tx_await, rx_ctx.count, rx_await);
     if (res < 0) {
         goto hell;
     }

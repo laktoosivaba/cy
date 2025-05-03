@@ -254,7 +254,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     (void)transfer;
     (void)ts_us;
     (void)payload;
-    assert(false); // TODO IMPLEMENT
+    // TODO IMPLEMENT
 }
 
 // ----------------------------------------  TOPIC HASH  ----------------------------------------
