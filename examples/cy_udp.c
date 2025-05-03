@@ -10,7 +10,7 @@
 #endif
 #include <time.h>
 
-/// Maximum expected incoming datagram size. IF jumbo frames are expected, this value should be increased.
+/// Maximum expected incoming datagram size. If larger jumbo frames are expected, this value should be increased.
 #define RX_BUFFER_SIZE 2000
 
 static uint64_t min_u64(const uint64_t a, const uint64_t b)
@@ -91,31 +91,31 @@ static bool is_valid_ip(const uint32_t ip)
 
 static cy_err_t transport_subscribe(struct cy_topic_t* const cy_topic)
 {
-    struct cy_udp_topic_t* const cy_udp_topic = (struct cy_udp_topic_t*)cy_topic;
-    const struct cy_udp_t* const cy_udp       = (struct cy_udp_t*)cy_topic->cy;
+    struct cy_udp_topic_t* const topic  = (struct cy_udp_topic_t*)cy_topic;
+    const struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy_topic->cy;
 
     // Set up the udpard subscription. This does not yet allocate any resources.
-    cy_err_t res = (cy_err_t)udpardRxSubscriptionInit(
-      &cy_udp_topic->sub, cy_topic->subject_id, cy_topic->sub_extent, cy_udp->rx_mem);
+    cy_err_t res =
+      (cy_err_t)udpardRxSubscriptionInit(&topic->sub, cy_topic->subject_id, cy_topic->sub_extent, cy_udp->rx_mem);
     if (res < 0) {
         return res; // No cleanup needed, no resources allocated yet.
     }
 
     // Open the sockets for this subscription.
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-        cy_udp_topic->sock_rx[i].fd = -1;
+        topic->sock_rx[i].fd = -1;
         if ((res >= 0) && is_valid_ip(cy_udp->io[i].local_iface_address)) {
-            res = udp_rx_init(&cy_udp_topic->sock_rx[i],
+            res = udp_rx_init(&topic->sock_rx[i],
                               cy_udp->io[i].local_iface_address,
-                              cy_udp_topic->sub.udp_ip_endpoint.ip_address,
-                              cy_udp_topic->sub.udp_ip_endpoint.udp_port);
+                              topic->sub.udp_ip_endpoint.ip_address,
+                              topic->sub.udp_ip_endpoint.udp_port);
         }
     }
 
     // Cleanup on error.
     if (res < 0) {
         for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-            udp_rx_close(&cy_udp_topic->sock_rx[i]);
+            udp_rx_close(&topic->sock_rx[i]);
         }
     }
     return res;
@@ -171,7 +171,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
         }
     }
 
-    // Initialize Cy. It will not emit any transfers; this only happens from cy_update() and cy_publish().
+    // Initialize Cy. It will not emit any transfers; this only happens from cy_heartbeat() and cy_publish().
     if (res >= 0) {
         res = cy_new(&cy_udp->base,
                      uid,
@@ -394,10 +394,10 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         }
     }
 
-    // Remember that we need to periodically poll cy_update() even if no traffic is received.
+    // Remember that we need to periodically poll cy_heartbeat() even if no traffic is received.
     // The update needs to be invoked after all incoming transfers are handled in this cycle, not before.
     assert(res >= 0);
-    res = cy_update(&cy_udp->base);
+    res = cy_heartbeat(&cy_udp->base);
 
     // While handling the events, we could have generated additional TX items, so we need to process them again.
     // We do it even in case of failure such that transient errors do not stall the TX queue.

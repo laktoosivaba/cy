@@ -163,39 +163,43 @@ static size_t smaller(const size_t a, const size_t b)
 
 struct topic_gossip_t
 {
-    struct cy_crdt_meta_t crdt_meta;
-    uint32_t              ttl_ms;
-    uint16_t              value;
-    uint16_t              _padding_a;
-    uint32_t              _padding_b;
-    uint8_t               name_length;
-    char                  name[CY_TOPIC_NAME_MAX];
+    uint64_t lamport_clock;
+    uint64_t owner_uid;
+    uint16_t value;
+    uint16_t _padding_a;
+    uint32_t _padding_b;
+    uint8_t  name_length;
+    char     name[CY_TOPIC_NAME_MAX];
 };
+static_assert(sizeof(struct topic_gossip_t) == 8 + 4 + 4 + 2 + 6 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
 {
     uint32_t              uptime;
-    uint32_t              _padding_a;
+    uint16_t              _padding_a;
+    uint16_t              user_word;
     uint64_t              uid;
     struct topic_gossip_t topic_gossip;
 };
+static_assert(sizeof(struct heartbeat_t) == 128, "bad layout");
 
-static struct heartbeat_t make_heartbeat(const uint64_t              uptime_us,
-                                         const uint64_t              uid,
-                                         const struct cy_crdt_meta_t crdt_meta,
-                                         const uint16_t              crdt_value,
-                                         const char* const           crdt_name)
+static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
+                                         const uint64_t    uid,
+                                         const uint64_t    lamport_clock,
+                                         const uint64_t    owner_uid,
+                                         const uint16_t    crdt_value,
+                                         const char* const crdt_name)
 {
     struct heartbeat_t obj = {
         .uptime = (uint32_t)(uptime_us / 1000000U),
         .uid = uid,
         .topic_gossip =
             {
-                .crdt_meta = crdt_meta,
-                .ttl_ms = 0U,
-                .value = crdt_value,
-                .name_length = (uint8_t)smaller(strlen(crdt_name), CY_TOPIC_NAME_MAX),
+                .lamport_clock = lamport_clock,
+                .owner_uid     = owner_uid,
+                .value         = crdt_value,
+                .name_length   = (uint8_t)smaller(strlen(crdt_name), CY_TOPIC_NAME_MAX),
             },
     };
     memcpy(obj.topic_gossip.name, crdt_name, obj.topic_gossip.name_length);
@@ -217,8 +221,8 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic)
     // Construct the heartbeat message.
     // TODO: communicate how the topic is used: pub/sub, some other metadata?
     const uint64_t           now = cy->now(cy);
-    const struct heartbeat_t msg =
-      make_heartbeat(now - cy->started_at_us, cy->uid, topic->crdt_meta, topic->subject_id, topic->name);
+    const struct heartbeat_t msg = make_heartbeat(
+      now - cy->started_at_us, cy->uid, topic->lamport_clock, topic->owner_uid, topic->subject_id, topic->name);
     const size_t msg_size = get_heartbeat_size(&msg);
     assert(msg_size <= sizeof(msg));
     assert(msg.topic_gossip.name_length <= CY_TOPIC_NAME_MAX);
@@ -381,7 +385,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
     }
 }
 
-cy_err_t cy_update(struct cy_t* const cy)
+cy_err_t cy_heartbeat(struct cy_t* const cy)
 {
     cy_err_t res = 0;
     if (cy->now(cy) >= cy->heartbeat_next_us) {
@@ -433,8 +437,8 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->last_gossip_us = pinned ? cy->now(cy) : 0;
 
     // Declare ourselves as the owner of the topic. We may get kicked out later if there's a collision and we lose.
-    topic->crdt_meta.lamport_clock = 1; // By convention, the first valid record starts at 1.
-    topic->crdt_meta.owner_uid     = topic->cy->uid;
+    topic->lamport_clock = 1; // By convention, the first valid record starts at 1.
+    topic->owner_uid     = topic->cy->uid;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;

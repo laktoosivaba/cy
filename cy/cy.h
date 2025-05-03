@@ -13,7 +13,10 @@ extern "C"
 
 /// A sensible middle ground between worst-case gossip traffic and memory utilization vs. longest name support.
 /// In CAN FD networks, topic names should not be longer than 22 bytes to avoid multi-frame heartbeats.
-#define CY_TOPIC_NAME_MAX 80
+///
+/// The name length is chosen such that together with the 1-byte length prefix the result is a multiple of 8 bytes,
+/// because it helps with memory-aliased C structures for quick serialization.
+#define CY_TOPIC_NAME_MAX 87
 
 /// The max namespace length should also provide space for at least one separator and the one-character topic name.
 #define CY_NAMESPACE_NAME_MAX (CY_TOPIC_NAME_MAX - 2)
@@ -24,8 +27,6 @@ extern "C"
 /// The rate at which the heartbeat topic is published is also the absolute minimum library state update interval.
 /// It is not an error to update it more often, and in fact it is desirable to reduce possible frequency aliasing.
 #define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000UL
-
-#define CY_TOPIC_TTL_DEFAULT_us (3600U * 1000000UL)
 
 /// The range of unregulated identifiers to use for CRDT topic allocation.
 /// The range should be the same for all applications, so that they can all make deterministic and identical
@@ -101,13 +102,6 @@ typedef cy_err_t (*cy_transport_subscribe_t)(struct cy_topic_t*);
 /// Instructs the underlying transport to destroy an existing subscription.
 typedef void (*cy_transport_unsubscribe_t)(struct cy_topic_t*);
 
-/// Internal use only.
-struct cy_crdt_meta_t
-{
-    uint64_t owner_uid;     ///< Zero is not a valid UID.
-    uint32_t lamport_clock; ///< Starts at zero for an uninitialized entry.
-};
-
 struct cy_topic_t
 {
     struct cy_tree_t index_hash;
@@ -132,13 +126,13 @@ struct cy_topic_t
     uint64_t hash;
 
     uint16_t subject_id;
+    uint64_t lamport_clock;
+    uint64_t owner_uid; ///< Zero is not a valid UID.
 
     /// Updated whenever the topic is gossiped or its gossip is received from another node.
     /// It allows us to optimally decide which topic to gossip next such that redundant traffic and the time to
     /// full network state discovery is minimized.
     uint64_t last_gossip_us;
-
-    struct cy_crdt_meta_t crdt_meta;
 
     /// The user can use this field for arbitrary purposes.
     void* user;
@@ -168,8 +162,8 @@ struct cy_subscription_t
 };
 
 /// There are only two functions whose invocations may result in network traffic:
-///     - cy_update()  -- heartbeat only, at most one per call, at the specified fixed rate.
-///     - cy_publish() -- user-defined topics.
+/// - cy_heartbeat() -- heartbeat only, at most one per call (for default rate see CY_HEARTBEAT_PERIOD_DEFAULT_us).
+/// - cy_publish()   -- user transfers only.
 struct cy_t
 {
     /// The UID is actually composed of 16-bit vendor-ID, 16-bit product-ID, and 32-bit instance-ID (aka serial
@@ -216,7 +210,7 @@ struct cy_t
 /// this is the only topic that is needed by Cy itself. It will be initialized and managed automatically; if necessary,
 /// the user can add additional subscriptions to it later.
 ///
-/// No network traffic will be generated. The only function that can send heartbeat messages is cy_update().
+/// No network traffic will be generated. The only function that can send heartbeat messages is cy_heartbeat().
 cy_err_t cy_new(struct cy_t* const               cy,
                 const uint64_t                   uid,
                 const char* const                namespace_,
@@ -231,8 +225,8 @@ void     cy_destroy(struct cy_t* const cy);
 /// The library will dispatch it to the appropriate subscriber callbacks.
 /// Excluding the callbacks, the time complexity is constant.
 ///
-/// If this is invoked together with cy_update(), then cy_ingest() must be invoked BEFORE cy_update() to ensure that the
-/// latest state updates are reflected in the next heartbeat message.
+/// If this is invoked together with cy_heartbeat(), then cy_ingest() must be invoked BEFORE cy_heartbeat()
+/// to ensure that the latest state updates are reflected in the next heartbeat message.
 void cy_ingest(struct cy_topic_t* const        topic,
                const uint64_t                  timestamp_us,
                const struct cy_transfer_meta_t metadata,
@@ -245,11 +239,11 @@ void cy_ingest(struct cy_topic_t* const        topic,
 /// This is the only function that generates heartbeat --- the only kind of auxiliary traffic needed to support
 /// named topics. The returned value indicates the success of the heartbeat publication, if any took place, or zero.
 ///
-/// If this is invoked together with cy_ingest(), then cy_update() must be invoked AFTER cy_ingest() to ensure that the
-/// latest state updates are reflected in the heartbeat message.
+/// If this is invoked together with cy_ingest(), then cy_heartbeat() must be invoked AFTER cy_ingest() to ensure
+/// that the latest state updates are reflected in the heartbeat message.
 ///
 /// Excluding the transport_publish dependency, the time complexity is logarithmic in the number of topics.
-cy_err_t cy_update(struct cy_t* const cy);
+cy_err_t cy_heartbeat(struct cy_t* const cy);
 
 /// When the transport library detects a discriminator error, it will notify Cy about it to let it rectify the
 /// problem. Transport frames with mismatched discriminators must be dropped; no processing at the transport layer
@@ -311,7 +305,7 @@ static inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const
 }
 
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
-/// One can still use the transfers from the underlying transport library before they are passed to cy_update().
+/// One can still use the transfers from the underlying transport library before they are passed to cy_ingest().
 ///
 /// Future expansion: add wildcard subscribers that match topic names by pattern. Requires unbounded dynamic memory.
 ///
@@ -331,6 +325,12 @@ void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t
 /// Therefore, the transfer-ID is effectively the number of times this function was called on the topic.
 /// This function always publishes only one transfer as requested; no auxiliary traffic is generated.
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
+
+/// Make topic name canonical. The input buffer will be modified in place.
+/// The result is guaranteed to be not longer than the original name.
+/// Returns true on success, false if the name is not valid.
+/// Example: "/foo//bar/" -> "/foo/bar"
+bool cy_canonicalize(char* const topic_name);
 
 #ifdef __cplusplus
 }

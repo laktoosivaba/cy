@@ -5,8 +5,9 @@
 # while obsoleting the mode and health fields as they do not belong to its scope. New nodes should use
 # application-specific means of status reporting instead; Cyphal does not define the application layer.
 
-uint16 PUBLICATION_PERIOD_PREFERRED_ms =  200
-uint16 PUBLICATION_PERIOD_MAX_ms       = 1000
+uint16 PUBLICATION_PERIOD_MAX_ms = 1000
+# The message shall not be published less frequently than once per second.
+# High-performance transports like Ethernet-based ones should prefer 10 Hz.
 
 uint16 OFFLINE_TIMEOUT_ms = 3000
 # If the last message from the node was received more than this amount of time ago, it should be considered offline.
@@ -14,15 +15,18 @@ uint16 OFFLINE_TIMEOUT_ms = 3000
 uint32 uptime  # [second]
 # Other nodes may detect that a remote node has restarted when this value leaps backward.
 
-void32
-# In the v1 Heartbeat, this place used to contain the health, mode, and vendor-specific status code fields.
+void16
+# In the v1 Heartbeat, this place used to contain the health and mode fields.
 # These have been removed because they pertain to the application layer and are thus outside of the scope of
 # the heartbeat message. This space may be reused for something else in the future.
+# Subscribers using the old v1 Heartbeat type will interpret this message as nominal health, operational mode.
+
+uint16 user_word
+# An arbitrary 16-bit number with application-defined semantics. If not used, set to zero.
 #
-# Subscribers using the old v1 Heartbeat type will interpret this message as if it had nominal health,
-# operational mode, and zero vendor-specific status code.
-#
-# Additional 8 bits of padding have been added to enable type punning.
+# In the old uavcan.node.Heartbeat.1, there used to be an 8-bit vendor-specific status code here;
+# the least significant byte of the user word is interpreted by old heartbeat subscribers as the
+# vendor-specific status code, while the most significant byte is ignored.
 
 UID.0.1 uid
 # This 64-bit value completely and uniquely identifies the node: its vendor, product type, and specific instance.
