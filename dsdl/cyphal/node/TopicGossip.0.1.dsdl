@@ -8,8 +8,14 @@ void48
 
 @assert _offset_ == {192}
 
-uint8 NAME_CAPACITY = 87
-# The name capacity is chosen such that the total size of the message is a multiple of 8 bytes,
+uint8 NAME_CAPACITY = 103
+# Large names increase the CRDT gossip traffic, so they are unlikely to be useful; plus they affect the memory
+# footprint of protocol data structures. In practice, DDS and ROS topics longer than 80 characters are exceedingly
+# rare, even though the actual limit there is 256 bytes.
+#
+# CAN FD networks should avoid names longer than 22 characters to avoid multi-frame heartbeats.
+#
+# The value is chosen such that the total size of the message is a multiple of 8 bytes,
 # which simplifies memory aliasing of C structures.
 
 utf8[<=NAME_CAPACITY] name

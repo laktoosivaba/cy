@@ -182,7 +182,7 @@ struct heartbeat_t
     uint64_t              uid;
     struct topic_gossip_t topic_gossip;
 };
-static_assert(sizeof(struct heartbeat_t) == 128, "bad layout");
+static_assert(sizeof(struct heartbeat_t) == 144, "bad layout");
 
 static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
                                          const uint64_t    uid,

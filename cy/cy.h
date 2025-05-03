@@ -16,7 +16,7 @@ extern "C"
 ///
 /// The name length is chosen such that together with the 1-byte length prefix the result is a multiple of 8 bytes,
 /// because it helps with memory-aliased C structures for quick serialization.
-#define CY_TOPIC_NAME_MAX 87
+#define CY_TOPIC_NAME_MAX 103
 
 /// The max namespace length should also provide space for at least one separator and the one-character topic name.
 #define CY_NAMESPACE_NAME_MAX (CY_TOPIC_NAME_MAX - 2)
