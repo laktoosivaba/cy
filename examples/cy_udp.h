@@ -13,16 +13,15 @@ struct cy_udp_topic_t
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
     struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
-    struct
-    {
-        /// The count of out-of-memory errors that occurred while processing this topic.
-        /// Every OOM implies that either a frame or a full transfer were lost.
-        uint64_t count_oom;
 
-        /// Handler for errors occurring while reading from the socket of this topic. These are platform-specific.
-        /// NULL will suppress socket error handling, which is not recommended.
-        void (*sock_handler[CY_UDP_IFACE_COUNT_MAX])(struct cy_udp_topic_t*, struct udp_rx_handle_t*, int16_t);
-    } rx_err;
+    /// The count of out-of-memory errors that occurred while processing this topic.
+    /// Every OOM implies that either a frame or a full transfer were lost.
+    uint64_t rx_oom_count;
+
+    /// Handler for errors occurring while reading from the socket of this topic on the specified iface.
+    /// These are platform-specific.
+    /// NULL will suppress socket error handling, which will trigger an assertion fault in debug builds.
+    void (*rx_sock_err_handler)(struct cy_udp_topic_t* topic, size_t iface_index, int16_t error);
 };
 
 struct cy_udp_t
@@ -39,20 +38,18 @@ struct cy_udp_t
         struct udp_tx_handle_t tx_sock;
         uint32_t               local_iface_address;
 
-        /// Handler for errors occurring while writing into the tx socket. These are platform-specific.
-        /// NULL will suppress socket error handling, which is not recommended.
-        void (*sock_handler)(struct cy_udp_t*, struct udp_tx_handle_t*, int16_t);
-
         /// Number of tx frames that have timed out while waiting in the queue.
         uint64_t tx_timeout_count;
     } io[CY_UDP_IFACE_COUNT_MAX];
 
-    struct
-    {
-        size_t mem_allocated_fragments;
-        size_t mem_allocated_bytes;
-        size_t mem_oom_count;
-    } diag;
+    /// Handler for errors occurring while writing into a tx socket on the specified iface.
+    /// These are platform-specific.
+    /// NULL will suppress socket error handling, which will trigger an assertion fault in debug builds.
+    void (*tx_sock_err_handler)(struct cy_udp_t* cy_udp, size_t iface_index, int16_t error);
+
+    size_t mem_allocated_fragments;
+    size_t mem_allocated_bytes;
+    size_t mem_oom_count;
 };
 
 /// A convenience wrapper over clock_gettime(CLOCK_MONOTIC).

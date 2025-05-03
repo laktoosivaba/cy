@@ -33,10 +33,10 @@ static void* mem_alloc(void* const user, const size_t size)
     void* const            out    = malloc(size);
     if (size > 0) {
         if (out != NULL) {
-            cy_udp->diag.mem_allocated_bytes += size;
-            cy_udp->diag.mem_allocated_fragments++;
+            cy_udp->mem_allocated_bytes += size;
+            cy_udp->mem_allocated_fragments++;
         } else {
-            cy_udp->diag.mem_oom_count++;
+            cy_udp->mem_oom_count++;
         }
     }
     return out;
@@ -46,10 +46,10 @@ static void mem_free(void* const user, const size_t size, void* const pointer)
 {
     struct cy_udp_t* const cy_udp = (struct cy_udp_t*)user;
     if (pointer != NULL) {
-        assert(cy_udp->diag.mem_allocated_bytes >= size);
-        assert(cy_udp->diag.mem_allocated_fragments > 0);
-        cy_udp->diag.mem_allocated_bytes -= size;
-        cy_udp->diag.mem_allocated_fragments--;
+        assert(cy_udp->mem_allocated_bytes >= size);
+        assert(cy_udp->mem_allocated_fragments > 0);
+        cy_udp->mem_allocated_bytes -= size;
+        cy_udp->mem_allocated_fragments--;
         free(pointer);
     }
 }
@@ -218,8 +218,8 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
                         break; // Socket no longer writable, stop sending for now to retry later.
                     }
                     if (send_res < 0) {
-                        if (cy_udp->io[i].sock_handler != NULL) {
-                            cy_udp->io[i].sock_handler(cy_udp, &cy_udp->io[i].tx_sock, send_res);
+                        if (cy_udp->tx_sock_err_handler != NULL) {
+                            cy_udp->tx_sock_err_handler(cy_udp, i, send_res);
                         } else {
                             assert(false); // Unhandled error -- alert debug builds.
                         }
@@ -248,7 +248,7 @@ static void ingest_topic(struct cy_udp_topic_t* const topic, const struct Udpard
             udpardRxFragmentFree(transfer->payload, topic->sub.memory.fragment, topic->sub.memory.payload);
             payload_freed = true;
         } else {
-            topic->rx_err.count_oom++;
+            topic->rx_oom_count++;
             goto hell;
         }
     }
@@ -356,7 +356,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             .data = cy_udp->mem.allocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE),
         };
         if (NULL == payload.data) {
-            topic->rx_err.count_oom++;
+            topic->rx_oom_count++;
             continue;
         }
 
@@ -367,8 +367,8 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);
-            if (topic->rx_err.sock_handler[iface_index] != NULL) {
-                topic->rx_err.sock_handler[iface_index](topic, &topic->sock_rx[iface_index], rx_result);
+            if (topic->rx_sock_err_handler != NULL) {
+                topic->rx_sock_err_handler(topic, iface_index, rx_result);
             } else {
                 assert(false); // Unhandled error -- alert debug builds.
             }
@@ -376,7 +376,6 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         }
 
         // Pass the data buffer into LibUDPard then into Cy for further processing. It takes ownership of the buffer.
-        // udpard reassembly errors are not fatal.
         if (cy_topic_has_local_subscribers(&topic->base)) {
             struct UdpardRxTransfer transfer = { 0 }; // udpard takes ownership of the payload buffer.
             const int_fast8_t er = udpardRxSubscriptionReceive(&topic->sub, ts_us, payload, iface_index, &transfer);
@@ -385,7 +384,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             } else if (er == 0) {
                 (void)0; // Transfer is not yet completed, nothing to do for now.
             } else if (er == -UDPARD_ERROR_MEMORY) {
-                topic->rx_err.count_oom++;
+                topic->rx_oom_count++;
             } else {
                 assert(false); // Unreachable -- internal error: unanticipated UDPARD error state (not possible).
             }
