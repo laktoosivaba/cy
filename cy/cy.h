@@ -121,6 +121,7 @@ typedef cy_err_t (*cy_transport_set_node_id_t)(struct cy_t*);
 /// This is invoked only if a node-ID conflict is detected; in a well-managed network this should never happen.
 /// If the transport does not support reconfiguration or it is deemed too complicated to support,
 /// one solution is to simply restart the node.
+/// It is recommended to purge the tx queue to avoid further collisions.
 typedef void (*cy_transport_clear_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
@@ -171,16 +172,14 @@ struct cy_topic_t
     uint64_t owner_uid; ///< Zero is not a valid UID.
     uint16_t subject_id;
 
-    /// Updated whenever the topic is gossiped or its gossip is received from another node.
-    /// It allows us to optimally decide which topic to gossip next such that redundant traffic and the time to
-    /// full network state discovery is minimized.
+    /// Updated whenever the topic is gossiped.
     ///
-    /// TODO: consider this: what if the network is semi-partitioned where some nodes see a subset of others,
-    /// and our node straddles multiple partitions? This could occur in packet switched networks or if redundant
-    /// interfaces are used. Our coordinated publishing can naturally settle on a stable state where some nodes
-    /// become responsible for publishing specific topics, and nodes that happen to be in a different partition
-    /// will never see those topics. Do we care about this failure case? What needs analysis is how likely it
-    /// is for a set of nodes to encounter a stable arrangement where each node publishes only a subset of topics.
+    /// Notably, this is NOT updated when we receive a gossip from another node. While this approach can reduce
+    /// redundant gossip traffic (no need to publish a gossip when the network just saw it), it can also lead to
+    /// issues if the network is semi-partitioned such that the local node straddles multiple partitions.
+    /// This could occur in packet switched networks or if redundant interfaces are used. Such coordinated publishing
+    /// can naturally settle on a stable state where some nodes become responsible for publishing specific topics,
+    /// and nodes that happen to be in a different partition will never see those topics.
     uint64_t last_gossip_us;
 
     /// The user can use this field for arbitrary purposes.
@@ -397,11 +396,10 @@ void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t
 /// to avoid this, it is possible to check cy_has_node_id() before calling this function.
 cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
 
-/// Make topic name canonical. The input buffer will be modified in place.
-/// The result is guaranteed to be not longer than the original name.
-/// Returns true on success, false if the name is not valid.
+/// Make topic name canonical. The output buffer shall be at least CY_TOPIC_NAME_MAX + 1 bytes long.
+/// Returns positive length on success, zero if the name is not valid.
 /// Example: "/foo//bar/" -> "/foo/bar"
-bool cy_canonicalize(char* const topic_name);
+size_t cy_canonicalize_topic(const char* const in, char* const out);
 
 /// For diagnostics and logging only. Do not use in embedded and real-time applications.
 /// This function is only required if CY_CONFIG_TRACE is defined and is nonzero; otherwise it should be left undefined.

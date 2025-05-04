@@ -54,6 +54,16 @@ static void mem_free(void* const user, const size_t size, void* const pointer)
     }
 }
 
+static void purge_tx(struct cy_udp_t* const cy_udp, const uint_fast8_t iface_index)
+{
+    struct UdpardTx* const     tx = &cy_udp->io[iface_index].tx;
+    const struct UdpardTxItem* it = NULL;
+    while ((it = udpardTxPeek(tx))) {
+        udpardTxFree(tx->memory, udpardTxPop(tx, it));
+    }
+    udp_tx_close(&cy_udp->io[iface_index].tx_sock); // The handle may be invalid, but we don't care.
+}
+
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 static uint64_t now_us(struct cy_t* const cy)
 {
@@ -78,11 +88,14 @@ static void transport_clear_node_id(struct cy_t* const cy)
 {
     assert(cy != NULL);
     struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy;
-    (void)cy_udp;
     // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
     // so it does not require updating.
-    // Currently, there is literally nothing to do. When we add services, we will need to change the RPC multicast
-    // group membership, which might be some hairy business as we'll need to close and reopen sockets.
+    // Purge the tx queues to avoid further collisions.
+    for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
+        purge_tx(cy_udp, i);
+    }
+    // When we add services, we will need to change the RPC multicast group membership,
+    // which might be some hairy business as we'll need to close and reopen sockets.
     // Cyphal/CAN transports will need to reconfigure the CAN acceptance filters.
 }
 
@@ -213,12 +226,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     // Cleanup on error.
     if (res < 0) {
         for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-            struct UdpardTx* const     tx = &cy_udp->io[i].tx;
-            const struct UdpardTxItem* it = NULL;
-            while ((it = udpardTxPeek(tx))) {
-                udpardTxFree(tx->memory, udpardTxPop(tx, it));
-            }
-            udp_tx_close(&cy_udp->io[i].tx_sock); // The handle may be invalid, but we don't care.
+            purge_tx(cy_udp, i);
         }
     }
     return res;

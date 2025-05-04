@@ -218,8 +218,8 @@ static bool bloom64_get(const size_t bloom_capacity, const uint64_t* const bloom
 static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
 {
     assert(bloom != NULL);
-    for (size_t i = 0; i < (bloom_capacity + 63U) / 64U; i++) {
-        bloom[i] = 0ULL; // I suppose this is better than memset cuz we're aligned to 64 bits.
+    for (size_t i = 0; i < (bloom_capacity + 63U) / 64U; i++) { // dear compiler please unroll this
+        bloom[i] = 0U; // I suppose this is better than memset cuz we're aligned to 64 bits.
     }
 }
 
@@ -445,9 +445,6 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     }
     assert(topic->name_length == gos->name_length);
 
-    // This will prevent us from publishing this topic soon again because the network just saw it.
-    update_last_gossip_time(topic, ts_us);
-
     // If the gossiped state matches our local replica, nothing needs to be done.
     // This is the most common case that occurs all the time in a stable network, so we need to optimize for it.
     if ((topic->lamport_clock == gos->lamport_clock) && //
@@ -634,8 +631,13 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
              cy->node_id,
              popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom));
     // We must reset the Bloom filter because there may be tombstones in it.
-    // It will be repopulated afresh during the delay we set above.
+    // It will be repopulated afresh during the delay we set below.
     bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
+    // We don't want to reuse the same node-ID to avoid the risk of picking up RPC transfers addressed to the
+    // conflicting node, so we mark it used. The conflicting node may continue using that address if it hasn't heard
+    // us yet, which is preferable as it minimizes disruptions. If the other node heard us, it will also be abandoning
+    // this address, but we don't want it either because there may be in-flight RPC transfers addressed to it.
+    bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id);
     // Restart the node-ID allocation process.
     cy->node_id = CY_NODE_ID_INVALID;
     cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
@@ -675,7 +677,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->sub_list        = NULL;
     topic->sub_active      = false;
 
-    bool ok = (topic->name_length > 0) && (topic->name_length <= CY_TOPIC_NAME_MAX) && //
+    bool ok = (topic->name_length > 1) && (topic->name_length <= CY_TOPIC_NAME_MAX) && (topic->name[0] == '/') &&
               (cy->topic_count < CY_TOPIC_SUBJECT_COUNT);
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.
