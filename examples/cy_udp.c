@@ -61,6 +61,31 @@ static uint64_t now_us(struct cy_t* const cy)
     return cy_udp_now_us();
 }
 
+static cy_err_t transport_set_node_id(struct cy_t* const cy)
+{
+    assert(cy != NULL);
+    struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy;
+    (void)cy_udp;
+    // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
+    // so it does not require updating.
+    // Currently, there is literally nothing to do. When we add services, we will need to change the RPC multicast
+    // group membership, which might be some hairy business as we'll need to close and reopen sockets.
+    // Cyphal/CAN transports will need to reconfigure the CAN acceptance filters.
+    return 0;
+}
+
+static void transport_clear_node_id(struct cy_t* const cy)
+{
+    assert(cy != NULL);
+    struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy;
+    (void)cy_udp;
+    // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
+    // so it does not require updating.
+    // Currently, there is literally nothing to do. When we add services, we will need to change the RPC multicast
+    // group membership, which might be some hairy business as we'll need to close and reopen sockets.
+    // Cyphal/CAN transports will need to reconfigure the CAN acceptance filters.
+}
+
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 static cy_err_t transport_publish(struct cy_topic_t* const  topic,
                                   const uint64_t            tx_deadline_us,
@@ -137,8 +162,6 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
 {
     assert(cy_udp != NULL);
     memset(cy_udp, 0, sizeof(*cy_udp));
-    // FIXME: the local node ID must be managed by the transport library. We should not touch that here.
-    cy_udp->local_node_id = ((uint32_t)rand()) % UDPARD_NODE_ID_MAX;
     // Set up the memory resources. We could use block pool allocator here as well!
     cy_udp->mem.allocate                  = mem_alloc;
     cy_udp->mem.deallocate                = mem_free;
@@ -155,7 +178,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
         cy_udp->io[i].local_iface_address = 0;
         cy_udp->io[i].tx_sock.fd          = -1;
         res =
-          (cy_err_t)udpardTxInit(&cy_udp->io[i].tx, &cy_udp->local_node_id, tx_queue_capacity_per_iface, cy_udp->mem);
+          (cy_err_t)udpardTxInit(&cy_udp->io[i].tx, &cy_udp->base.node_id, tx_queue_capacity_per_iface, cy_udp->mem);
     }
     if (res < 0) {
         return res; // Cleanup not required -- no resources allocated yet.
@@ -175,12 +198,16 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     if (res >= 0) {
         res = cy_new(&cy_udp->base,
                      uid,
+                     CY_NODE_ID_INVALID,
+                     UDPARD_NODE_ID_MAX,
                      namespace_,
                      &cy_udp->heartbeat_topic.base,
                      &now_us,
-                     &transport_publish,
-                     &transport_subscribe,
-                     &transport_unsubscribe);
+                     (struct cy_transport_io_t){ .set_node_id   = transport_set_node_id,
+                                                 .clear_node_id = transport_clear_node_id,
+                                                 .publish       = transport_publish,
+                                                 .subscribe     = transport_subscribe,
+                                                 .unsubscribe   = transport_unsubscribe });
     }
 
     // Cleanup on error.
@@ -352,22 +379,22 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         // Allocate memory that we will read the data into. The ownership of this memory will be transferred
         // to LibUDPard, which will free it when it is no longer needed.
         // A deeply embedded system may be able to transfer this memory directly from the NIC driver to eliminate copy.
-        struct UdpardMutablePayload payload = {
+        struct UdpardMutablePayload dgram = {
             .size = RX_BUFFER_SIZE,
             .data = cy_udp->mem.allocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE),
         };
-        if (NULL == payload.data) {
+        if (NULL == dgram.data) {
             topic->rx_oom_count++;
             continue;
         }
 
         // Read the data from the socket into the buffer we just allocated.
-        const int16_t rx_result = udp_rx_receive(rx_await[i], &payload.size, payload.data);
+        const int16_t rx_result = udp_rx_receive(rx_await[i], &dgram.size, dgram.data);
         assert(0 != rx_result);
         if (rx_result < 0) {
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
-            cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);
+            cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
             if (topic->rx_sock_err_handler != NULL) {
                 topic->rx_sock_err_handler(topic, iface_index, rx_result);
             } else {
@@ -376,10 +403,23 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             continue;
         }
 
+        // Check for address collisions. This must be done at the frame level because if there are multiple nodes
+        // sitting at our ID, we may be unable to receive any multiframe transfers from them.
+        // TODO: the header needs to be verified (version & CRC) and it has to be done by LibUDPard; perhaps we need
+        // to expose something like bool udpardRxFrameParse(payload, out_transfer_metadata)?
+        // Alternatively, it could be an optional out-parameter of udpardRxSubscriptionReceive()?
+        {
+            const uint16_t src_nid = (uint16_t)(((const uint8_t*)dgram.data)[2] | //
+                                                (((uint16_t)((const uint8_t*)dgram.data)[3]) << 8U));
+            if ((src_nid <= UDPARD_NODE_ID_MAX) && (src_nid == cy_udp->base.node_id)) {
+                cy_notify_node_id_collision(&cy_udp->base);
+            }
+        }
+
         // Pass the data buffer into LibUDPard then into Cy for further processing. It takes ownership of the buffer.
         if (cy_topic_has_local_subscribers(&topic->base)) {
-            struct UdpardRxTransfer transfer = { 0 }; // udpard takes ownership of the payload buffer.
-            const int_fast8_t er = udpardRxSubscriptionReceive(&topic->sub, ts_us, payload, iface_index, &transfer);
+            struct UdpardRxTransfer transfer = { 0 }; // udpard takes ownership of the dgram payload buffer.
+            const int_fast8_t       er = udpardRxSubscriptionReceive(&topic->sub, ts_us, dgram, iface_index, &transfer);
             if (er == 1) {
                 ingest_topic(topic, &transfer);
             } else if (er == 0) {
@@ -390,7 +430,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
                 assert(false); // Unreachable -- internal error: unanticipated UDPARD error state (not possible).
             }
         } else { // The subscription was disabled while processing other socket reads. Ignore it.
-            cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, payload.data);
+            cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
         }
     }
 

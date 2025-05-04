@@ -1,4 +1,4 @@
-# Cyphal named topics design
+# Robust zero-configuration decentralized Cyphal with named topics
 
 An experiment in robust zero-configuration pub-sub based on CRDT that works anywhere. The design favors availability and guarantees eventual consistency. Brief periods of degraded service are possible when new nodes or new topics are introduced into the network. A fully settled network is guaranteed to function deterministically just like a statically configured one; however, the initial settling process is stochastic in its nature. A found steady configuration can be stored to allow instant deterministic state recovery at every boot, while this state does not have to be pre-configured manually like in the original design.
 
@@ -146,4 +146,3 @@ Cyphal/CAN does not really have enough space for the full 16-bit topic CRC. Ther
 ### Topic CRC collision detection
 
 If the transport library detects a topic CRC error, it should notify the higher layer, so that a corrective CRDT gossip entry could be published, allowing the network to heal faster.
-

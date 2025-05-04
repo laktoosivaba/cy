@@ -28,7 +28,6 @@ struct cy_udp_t
 {
     struct cy_t                    base;
     struct cy_udp_topic_t          heartbeat_topic;
-    UdpardNodeID                   local_node_id;
     struct UdpardMemoryResource    mem;
     struct UdpardRxMemoryResources rx_mem;
 

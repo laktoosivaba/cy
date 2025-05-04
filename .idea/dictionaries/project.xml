@@ -3,6 +3,7 @@
     <words>
       <w>ards</w>
       <w>bday</w>
+      <w>csma</w>
       <w>cyphal</w>
       <w>cyudp</w>
       <w>dscp</w>
@@ -14,6 +15,7 @@
       <w>libudpard</w>
       <w>opencyphal</w>
       <w>reuseport</w>
+      <w>splitmix</w>
       <w>tfer</w>
       <w>udpard</w>
       <w>usec</w>

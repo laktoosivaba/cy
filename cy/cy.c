@@ -16,6 +16,11 @@
 /// If a collision is found, do not gossip the topic if it was last seen less than this long ago.
 #define GOSSIP_RATE_LIMIT_us 100000UL
 
+static size_t smaller(const size_t a, const size_t b)
+{
+    return (a < b) ? a : b;
+}
+
 // ----------------------------------------  CRC-64/WE  ----------------------------------------
 
 #define CRC64WE_INITIAL UINT64_MAX
@@ -154,6 +159,87 @@ static struct cy_tree_t* cavl_factory_topic_gossip_time(void* const user_referen
     return &((struct cy_topic_t*)user_reference)->index_gossip_time;
 }
 
+// ----------------------------------------  RANDOM NUMBERS  ----------------------------------------
+
+static _Thread_local uint64_t g_splitmix64_state;
+
+/// The standard splitmix64 implementation.
+static uint64_t splitmix64(void)
+{
+    uint64_t z = (g_splitmix64_state += 0x9e3779b97f4a7c15U);
+    z          = (z ^ (z >> 30U)) * 0xbf58476d1ce4e5b9U;
+    z          = (z ^ (z >> 27U)) * 0x94d049bb133111ebU;
+    return z ^ (z >> 31U);
+}
+
+/// The limits are inclusive. Result undefined unless min < max.
+static uint64_t random_uint(const uint64_t min, const uint64_t max)
+{
+    return (splitmix64() % (max - min)) + min;
+}
+
+// ----------------------------------------  NODE ID ALLOCATION  ----------------------------------------
+
+// ReSharper disable CppDFAConstantParameter
+
+/// A Bloom filter is a set-only structure so there is no way to clear a bit after it has been set.
+/// It is only possible to purge the entire filter state.
+static void bloom64_set(const size_t bloom_capacity, uint64_t* const bloom, const size_t value)
+{
+    assert(bloom != NULL);
+    const size_t index = value % bloom_capacity;
+    bloom[index / 64U] |= (1ULL << (index % 64U));
+}
+
+static bool bloom64_get(const size_t bloom_capacity, const uint64_t* const bloom, const size_t value)
+{
+    assert(bloom != NULL);
+    const size_t index = value % bloom_capacity;
+    return (bloom[index / 64U] & (1ULL << (index % 64U))) != 0;
+}
+
+static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
+{
+    assert(bloom != NULL);
+    for (size_t i = 0; i < (bloom_capacity + 63U) / 64U; i++) {
+        bloom[i] = 0ULL; // I suppose this is better than memset cuz we're aligned to 64 bits.
+    }
+}
+
+/// This is guaranteed to return a valid node-ID. If the Bloom filter is not full, an unoccupied node-ID will be
+/// chosen, and the corresponding entry in the filter will be set. If the filter is full, a random node-ID will be
+/// chosen, which can only happen if more than filter capacity nodes are currently online.
+/// The complexity is constant, independent of the filter occupancy.
+static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* const bloom, const uint16_t node_id_max)
+{
+    // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
+    const size_t num_words  = (smaller(node_id_max, bloom_capacity) + 63U) / 64U;
+    uint16_t     word_index = (uint16_t)random_uint(0U, num_words - 1U);
+    for (size_t i = 0; i < num_words; i++) {
+        if (bloom[word_index] != UINT64_MAX) {
+            break;
+        }
+        word_index = (word_index + 1U) % num_words;
+    }
+    const uint64_t word = bloom[word_index];
+    if (word == UINT64_MAX) {
+        return (uint16_t)random_uint(0U, node_id_max); // The filter is full, fallback to random node-ID.
+    }
+    // Now we have a word with at least one zero bit. Find a random zero bit in it.
+    uint8_t bit_index = (uint8_t)random_uint(0U, 63U);
+    assert(word != UINT64_MAX);
+    while ((word & (1ULL << bit_index)) != 0) { // guaranteed to terminate, see above.
+        bit_index = (bit_index + 1U) % 64U;
+    }
+    const uint16_t node_id = (uint16_t)((word_index * 64U) + bit_index);
+    assert(node_id < node_id_max);
+    assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
+    bloom64_set(bloom_capacity, (uint64_t*)bloom, node_id);
+    return node_id;
+}
+
+// ReSharper restore CppDFAConstantParameter
+
 // ----------------------------------------  TOPIC HASH  ----------------------------------------
 
 /// Returns CY_SUBJECT_ID_INVALID if the string is not a valid pinned subject-ID form.
@@ -196,11 +282,6 @@ static uint64_t topic_hash(const char* const name, bool* const out_pinned)
 }
 
 // ----------------------------------------  HEARTBEAT IO  ----------------------------------------
-
-static size_t smaller(const size_t a, const size_t b)
-{
-    return (a < b) ? a : b;
-}
 
 struct topic_gossip_t
 {
@@ -286,7 +367,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
     const struct cy_payload_t payload = { .data = &msg, .size = msz }; // FIXME serialization
 
     // Publish the message.
-    const cy_err_t pub_res = cy->transport_publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
+    const cy_err_t pub_res = cy->transport.publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
     cy->heartbeat_topic->pub_transfer_id++;
 
     // Update gossip time even if failed so we don't get stuck publishing same gossip if error reporting is broken.
@@ -352,25 +433,26 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
 
 // ----------------------------------------  PUBLIC API  ----------------------------------------
 
-cy_err_t cy_new(struct cy_t* const               cy,
-                const uint64_t                   uid,
-                const char* const                namespace_,
-                struct cy_topic_t* const         heartbeat_topic,
-                const cy_now_t                   now,
-                const cy_transport_publish_t     publish,
-                const cy_transport_subscribe_t   subscribe,
-                const cy_transport_unsubscribe_t unsubscribe)
+cy_err_t cy_new(struct cy_t* const             cy,
+                const uint64_t                 uid,
+                const uint16_t                 node_id,
+                const uint16_t                 node_id_max,
+                const char* const              namespace_,
+                struct cy_topic_t* const       heartbeat_topic,
+                const cy_now_t                 now,
+                const struct cy_transport_io_t transport_io)
 {
     assert(cy != NULL);
     assert(uid != 0);
-    assert(now != NULL);
-    assert(publish != NULL);
-    assert(subscribe != NULL);
-    assert(unsubscribe != NULL);
+
+    // This is fine even if multiple nodes run locally!
+    g_splitmix64_state ^= uid;
 
     // Init the object.
     memset(cy, 0, sizeof(*cy));
-    cy->uid = uid;
+    cy->uid         = uid;
+    cy->node_id     = (node_id <= node_id_max) ? node_id : CY_NODE_ID_INVALID;
+    cy->node_id_max = node_id_max;
 
     cy->namespace_length = (namespace_ == NULL) ? 0 : smaller(strlen(namespace_), CY_NAMESPACE_NAME_MAX);
     if (cy->namespace_length > 0) {
@@ -383,9 +465,7 @@ cy_err_t cy_new(struct cy_t* const               cy,
     }
     cy->user                  = NULL;
     cy->now                   = now;
-    cy->transport_publish     = publish;
-    cy->transport_subscribe   = subscribe;
-    cy->transport_unsubscribe = unsubscribe;
+    cy->transport             = transport_io;
     cy->heartbeat_topic       = heartbeat_topic;
     cy->topics_by_hash        = NULL;
     cy->topics_by_subject_id  = NULL;
@@ -395,20 +475,32 @@ cy_err_t cy_new(struct cy_t* const               cy,
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
-    // We want to publish our heartbeat ASAP to speed up network convergence.
-    cy->heartbeat_next_us   = cy->started_at_us;
+    bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
+
+    // If a node-ID is given explicitly, we want to publish our heartbeat ASAP to speed up network convergence
+    // and to claim the address. If we are not given a node-ID, we need to first listen to the network.
     cy->heartbeat_period_us = CY_HEARTBEAT_PERIOD_DEFAULT_us;
+    cy->heartbeat_next_us   = cy->started_at_us;
+    cy_err_t res            = 0;
+    if (cy->node_id > cy->node_id_max) {
+        cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
+    } else {
+        bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id);
+        res = cy->transport.set_node_id(cy);
+    }
 
     // Register the heartbeat topic and subscribe to it.
-    const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
-    assert(topic_ok);
-    const cy_err_t res = cy_subscribe(cy->heartbeat_topic,
-                                      &cy->heartbeat_sub,
-                                      sizeof(struct heartbeat_t),
-                                      CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
-                                      &on_heartbeat);
-    if (res < 0) {
-        cy_topic_destroy(cy->heartbeat_topic);
+    if (res >= 0) {
+        const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
+        assert(topic_ok);
+        res = cy_subscribe(cy->heartbeat_topic,
+                           &cy->heartbeat_sub,
+                           sizeof(struct heartbeat_t),
+                           CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
+                           &on_heartbeat);
+        if (res < 0) {
+            cy_topic_destroy(cy->heartbeat_topic);
+        }
     }
     return res;
 }
@@ -419,6 +511,19 @@ void cy_ingest(struct cy_topic_t* const        topic,
                const struct cy_payload_t       payload)
 {
     assert(topic != NULL);
+    struct cy_t* const cy = topic->cy;
+
+    // We snoop on all transfers to update the node-ID occupancy Bloom filter.
+    // If we don't have a node-ID and this is a newly discovered node, follow CSMA/CD: add random wait.
+    // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
+    if ((cy->node_id > cy->node_id_max) &&
+        !bloom64_get(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id)) {
+        // The mean extra time is chosen to be simply one heartbeat period.
+        cy->heartbeat_next_us += random_uint(0, 2 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
+    }
+    bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id);
+
+    // Simply invoke all callbacks in the subscription list.
     struct cy_subscription_t* sub = topic->sub_list;
     while (sub != NULL) {
         assert(sub->topic == topic);
@@ -432,17 +537,33 @@ void cy_ingest(struct cy_topic_t* const        topic,
 
 cy_err_t cy_heartbeat(struct cy_t* const cy)
 {
-    cy_err_t       res = 0;
     const uint64_t now = cy->now(cy);
-    if (now >= cy->heartbeat_next_us) {
-        const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
-        assert(t != NULL); // We always have at least the heartbeat topic.
-        struct cy_topic_t* const x = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
-        assert(x->cy == cy);
-        res = publish_heartbeat(x, now);
-        // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
-        cy->heartbeat_next_us += cy->heartbeat_period_us; // Do not accumulate heartbeat phase slip!
+    if (now < cy->heartbeat_next_us) {
+        return 0;
     }
+
+    // If it is time to publish a heartbeat but we still don't have a node-ID, it means that it is time to allocate!
+    cy_err_t res = 0;
+    if (cy->node_id >= cy->node_id_max) {
+        cy->node_id = allocate_node_id(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id_max);
+        assert(cy->node_id <= cy->node_id_max);
+        res = cy->transport.set_node_id(cy);
+    }
+    assert(cy->node_id <= cy->node_id_max);
+    if (res < 0) {
+        return res; // Failed to set node-ID, bail out. Will try again next time.
+    }
+
+    // Find the next topic to gossip.
+    const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
+    assert(t != NULL); // We always have at least the heartbeat topic.
+    struct cy_topic_t* const tp = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
+    assert(tp->cy == cy);
+
+    // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
+    res = publish_heartbeat(tp, now);
+    cy->heartbeat_next_us += cy->heartbeat_period_us; // Do not accumulate heartbeat phase slip!
+
     return res;
 }
 
@@ -457,6 +578,21 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic)
         // We could subtract the heartbeat period from the next heartbeat time to make it come out sooner,
         // but this way we would generate unpredictable network loading. We probably don't want that.
     }
+}
+
+void cy_notify_node_id_collision(struct cy_t* const cy)
+{
+    assert(cy != NULL);
+    if (cy->node_id > cy->node_id_max) {
+        return; // We are not using a node-ID, nothing to do.
+    }
+    // Restart the node-ID allocation process.
+    cy->transport.clear_node_id(cy);
+    cy->node_id = CY_NODE_ID_INVALID;
+    cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
+    // We must reset the Bloom filter because there may be tombstones in it.
+    // It will be repopulated afresh during the delay we set above.
+    bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
 }
 
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name)
@@ -614,7 +750,7 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
     // Ensure the transport layer subscription is active.
     cy_err_t err = 0;
     if (!topic->sub_active) {
-        err               = topic->cy->transport_subscribe(topic);
+        err               = topic->cy->transport.subscribe(topic);
         topic->sub_active = err >= 0;
     }
     return err;
@@ -626,7 +762,7 @@ cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_u
     assert((payload.data != NULL) || (payload.size == 0));
     assert((topic->name_length > 0) && (topic->name[0] != '\0'));
     assert(topic->subject_id < CY_TOTAL_SUBJECT_COUNT);
-    const cy_err_t res = topic->cy->transport_publish(topic, tx_deadline_us, payload);
+    const cy_err_t res = topic->cy->transport.publish(topic, tx_deadline_us, payload);
     topic->pub_transfer_id++;
     return res;
 }
