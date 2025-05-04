@@ -20,7 +20,7 @@ struct cy_udp_topic_t
 
     /// Handler for errors occurring while reading from the socket of this topic on the specified iface.
     /// These are platform-specific.
-    /// NULL will suppress socket error handling, which will trigger an assertion fault in debug builds.
+    /// The default handler is provided which will use CY_TRACE() to report the error.
     void (*rx_sock_err_handler)(struct cy_udp_topic_t* topic, uint_fast8_t iface_index, int16_t error);
 };
 
@@ -43,7 +43,7 @@ struct cy_udp_t
 
     /// Handler for errors occurring while writing into a tx socket on the specified iface.
     /// These are platform-specific.
-    /// NULL will suppress socket error handling, which will trigger an assertion fault in debug builds.
+    /// The default handler is provided which will use CY_TRACE() to report the error.
     void (*tx_sock_err_handler)(struct cy_udp_t* cy_udp, uint_fast8_t iface_index, int16_t error);
 
     size_t mem_allocated_fragments;

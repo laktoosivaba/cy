@@ -227,10 +227,10 @@ static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
 /// chosen, and the corresponding entry in the filter will be set. If the filter is full, a random node-ID will be
 /// chosen, which can only happen if more than filter capacity nodes are currently online.
 /// The complexity is constant, independent of the filter occupancy.
-static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* const bloom, const uint16_t node_id_max)
+static uint16_t pick_node_id(const size_t bloom_capacity, const uint64_t* const bloom, const uint16_t node_id_max)
 {
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
-    // This somewhat undermines the randomness of the result, but it is fast and simple.
+    // This somewhat undermines the randomness of the result, but it is always fast.
     const size_t num_words  = (smaller(node_id_max, bloom_capacity) + 63U) / 64U;
     size_t       word_index = (size_t)random_uint(0U, num_words - 1U);
     for (size_t i = 0; i < num_words; i++) {
@@ -251,15 +251,12 @@ static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* co
         bit_index = (bit_index + 1U) % 64U;
     }
 
-    // Now we have some valid node-ID. Recall that the Bloom filter maps multiple values to the same bit.
-    // This means that we can increase randomness by multiplying the node-ID by a multiple of the Bloom filter period.
+    // Now we have some valid free node-ID. Recall that the Bloom filter maps multiple values to the same bit.
+    // This means that we can increase randomness by incrementing the node-ID by a multiple of the Bloom filter period.
     size_t node_id = (word_index * 64U) + bit_index;
     assert(node_id < node_id_max);
     assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
-    const size_t oversubscription = (size_t)(node_id_max / bloom_capacity);
-    if (oversubscription > 0) {
-        node_id += (size_t)random_uint(0, oversubscription) * bloom_capacity;
-    }
+    node_id += (size_t)random_uint(0, node_id_max / bloom_capacity) * bloom_capacity;
     assert(node_id < node_id_max);
     assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
     bloom64_set(bloom_capacity, (uint64_t*)bloom, node_id);
@@ -395,6 +392,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
     const struct cy_payload_t payload = { .data = &msg, .size = msz }; // FIXME serialization
 
     // Publish the message.
+    assert(cy->node_id <= cy->node_id_max);
     const cy_err_t pub_res = cy->transport.publish(cy->heartbeat_topic, now + HEARTBEAT_PUB_TIMEOUT_us, payload);
     cy->heartbeat_topic->pub_transfer_id++;
 
@@ -546,7 +544,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
         // The mean extra time is chosen to be simply one heartbeat period.
         cy->heartbeat_next_us += random_uint(0, 2 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
         CY_TRACE(cy,
-                 "Discovered neighbor %u publishing on '%s'@%u. New Bloom popcount %zu",
+                 "Discovered neighbor %u publishing on '%s'@%u; new Bloom popcount %zu",
                  metadata.remote_node_id,
                  topic->name,
                  topic->subject_id,
@@ -576,11 +574,11 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
     // If it is time to publish a heartbeat but we still don't have a node-ID, it means that it is time to allocate!
     cy_err_t res = 0;
     if (cy->node_id >= cy->node_id_max) {
-        cy->node_id = allocate_node_id(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id_max);
+        cy->node_id = pick_node_id(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id_max);
         assert(cy->node_id <= cy->node_id_max);
         res = cy->transport.set_node_id(cy);
         CY_TRACE(cy,
-                 "Allocated node-ID %u; Bloom popcount %zu; set_node_id()->%d",
+                 "Picked own node-ID %u; Bloom popcount %zu; set_node_id()->%d",
                  cy->node_id,
                  popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom),
                  res);
@@ -608,7 +606,7 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic)
     // Schedule the topic for gossiping ASAP, unless it is already scheduled.
     if ((topic != NULL) && (topic->last_gossip_us > 0)) {
         CY_TRACE(topic->cy,
-                 "Discriminator collision on '%s'@%u. Scheduling to gossip on next heartbeat.",
+                 "Discriminator collision on '%s'@%u; scheduling to gossip on next heartbeat",
                  topic->name,
                  topic->subject_id);
         struct cy_tree_t** const index = &topic->cy->topics_by_gossip_time;
@@ -627,7 +625,7 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
         return; // We are not using a node-ID, nothing to do.
     }
     CY_TRACE(cy,
-             "Node-ID collision on %u. Bloom purge with popcount %zu",
+             "Node-ID collision on %u; Bloom purge with popcount %zu",
              cy->node_id,
              popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom));
     // We must reset the Bloom filter because there may be tombstones in it.
@@ -714,12 +712,11 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     if (ok) {
         cy->topic_count++;
         CY_TRACE(cy,
-                 "New topic '%s'@%u [%zu total], hash %016llX, pinned %d, last gossip at %llu us",
+                 "New topic '%s'@%u [%zu total], hash %016llx, last gossip %llu us",
                  topic->name,
                  topic->subject_id,
                  cy->topic_count,
                  (unsigned long long)topic->hash,
-                 pinned,
                  (unsigned long long)topic->last_gossip_us);
     }
     return ok;

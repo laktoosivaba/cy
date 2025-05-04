@@ -18,6 +18,20 @@ static uint64_t min_u64(const uint64_t a, const uint64_t b)
     return (a < b) ? a : b;
 }
 
+static void default_tx_sock_err_handler(struct cy_udp_t* const cy_udp,
+                                        const uint_fast8_t     iface_index,
+                                        const int16_t          error)
+{
+    CY_TRACE(&cy_udp->base, "TX socket error on iface #%u: %d", iface_index, error);
+}
+
+static void default_rx_sock_err_handler(struct cy_udp_topic_t* const topic,
+                                        const uint_fast8_t           iface_index,
+                                        const int16_t                error)
+{
+    CY_TRACE(topic->base.cy, "RX socket error on iface #%u topic %s: %d", iface_index, topic->base.name, error);
+}
+
 uint64_t cy_udp_now_us(void)
 {
     struct timespec ts;
@@ -61,7 +75,6 @@ static void purge_tx(struct cy_udp_t* const cy_udp, const uint_fast8_t iface_ind
     while ((it = udpardTxPeek(tx))) {
         udpardTxFree(tx->memory, udpardTxPop(tx, it));
     }
-    udp_tx_close(&cy_udp->io[iface_index].tx_sock); // The handle may be invalid, but we don't care.
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
@@ -183,6 +196,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     cy_udp->rx_mem.fragment               = cy_udp->mem;
     cy_udp->rx_mem.payload.deallocate     = mem_free;
     cy_udp->rx_mem.payload.user_reference = cy_udp;
+    cy_udp->tx_sock_err_handler           = default_tx_sock_err_handler;
 
     // Initialize the udpard tx pipelines. They are all initialized always even if the corresponding iface is disabled,
     // for regularity, because an unused tx pipline needs no resources, so it's not a problem.
@@ -227,6 +241,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     if (res < 0) {
         for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
             purge_tx(cy_udp, i);
+            udp_tx_close(&cy_udp->io[i].tx_sock); // The handle may be invalid, but we don't care.
         }
     }
     return res;
@@ -253,11 +268,8 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
                         break; // Socket no longer writable, stop sending for now to retry later.
                     }
                     if (send_res < 0) {
-                        if (cy_udp->tx_sock_err_handler != NULL) {
-                            cy_udp->tx_sock_err_handler(cy_udp, i, send_res);
-                        } else {
-                            assert(false); // Unhandled error -- alert debug builds.
-                        }
+                        assert(cy_udp->tx_sock_err_handler != NULL);
+                        cy_udp->tx_sock_err_handler(cy_udp, i, send_res);
                     }
                 } else {
                     cy_udp->io[i].tx_timeout_count++;
@@ -403,11 +415,8 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
-            if (topic->rx_sock_err_handler != NULL) {
-                topic->rx_sock_err_handler(topic, iface_index, rx_result);
-            } else {
-                assert(false); // Unhandled error -- alert debug builds.
-            }
+            assert(topic->rx_sock_err_handler != NULL);
+            topic->rx_sock_err_handler(topic, iface_index, rx_result);
             continue;
         }
 
@@ -479,5 +488,6 @@ bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* cons
     assert(topic != NULL);
     assert(name != NULL);
     memset(topic, 0, sizeof(*topic));
+    topic->rx_sock_err_handler = default_rx_sock_err_handler;
     return cy_topic_new(&cy_udp->base, &topic->base, name);
 }

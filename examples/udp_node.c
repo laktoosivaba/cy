@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <time.h>
 
 static uint16_t random_u16(void)
@@ -16,21 +17,10 @@ static uint32_t random_u32(void)
 
 static uint64_t random_uid(void)
 {
-    const uint16_t vid = UINT16_MAX;
+    const uint16_t vid = UINT16_MAX; // This is the reserved public VID.
     const uint16_t pid = random_u16();
     const uint32_t iid = random_u32();
     return (((uint64_t)vid) << 48U) | (((uint64_t)pid) << 32U) | iid;
-}
-
-static void tx_sock_err_handler(struct cy_udp_t* const cy_udp, const uint_fast8_t iface_index, const int16_t error)
-{
-    (void)cy_udp;
-    printf("TX socket error on iface #%u: %d\n", iface_index, error);
-}
-
-static void rx_sock_err_handler(struct cy_udp_topic_t* const topic, const uint_fast8_t iface_index, const int16_t error)
-{
-    printf("RX socket error on iface #%u topic %s: %d\n", iface_index, topic->base.name, error);
 }
 
 int main(const int argc, const char* const argv[])
@@ -60,8 +50,6 @@ int main(const int argc, const char* const argv[])
         printf("cy_udp_new: %d\n", res);
         return 1;
     }
-    cy_udp.tx_sock_err_handler                 = &tx_sock_err_handler;
-    cy_udp.heartbeat_topic.rx_sock_err_handler = &rx_sock_err_handler;
 
     // Spin the event loop.
     while (true) {
@@ -73,4 +61,40 @@ int main(const int argc, const char* const argv[])
     }
 
     return 0;
+}
+
+void cy_trace(struct cy_t* const cy, const char* const file, const uint_fast16_t line, const char* const format, ...)
+{
+    // Capture the uptime timestamp early.
+    static const uint64_t mega      = 1000000U;
+    const uint64_t        uptime_us = cy->now(cy) - cy->started_at_us;
+
+    // Get the current wall time and format it.
+    struct timespec ts;
+    (void)timespec_get(&ts, TIME_UTC);
+    const struct tm tm_local  = *localtime(&ts.tv_sec);
+    char            hhmmss[9] = { 0 };
+    (void)strftime(hhmmss, sizeof hhmmss, "%H:%M:%S", &tm_local);
+
+    // Print the header.
+    fprintf(stderr,
+            "CY(%08llx,'%s',%04llu.%06llu) %s.%03llu %s:%03u: ",
+            (unsigned long long)cy->uid,
+            cy->namespace_,
+            (unsigned long long)(uptime_us / mega),
+            (unsigned long long)(uptime_us % mega),
+            hhmmss,
+            (unsigned long long)ts.tv_nsec / mega,
+            file,
+            (unsigned)line);
+
+    // Print the message.
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    // Finalize.
+    fputc('\n', stderr);
+    fflush(stderr);
 }
