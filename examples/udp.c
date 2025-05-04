@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <unistd.h>
 #include <poll.h>
 #include <errno.h>
@@ -26,12 +28,40 @@
 /// RFC 2474.
 #define DSCP_MAX 63
 
+struct in_pktinfo
+{
+    unsigned ipi_ifindex;  // incoming ifindex
+    uint32_t ipi_spec_dst; // local destination address
+    uint32_t ipi_addr;     // header source address
+};
+
 static bool is_multicast(const uint32_t address)
 {
     return (address & 0xF0000000UL) == 0xE0000000UL; // NOLINT(*-magic-numbers)
 }
 
-int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address, uint16_t* const local_port)
+/// Zero on error, otherwise the interface index. Zero is not a valid interface index.
+static uint32_t get_local_iface_index(const uint32_t local_iface_address)
+{
+    const uint32_t  addr_be = htonl(local_iface_address);
+    struct ifaddrs* ifa;
+    uint32_t        idx = 0;
+    if (getifaddrs(&ifa) == 0) {
+        for (struct ifaddrs* it = ifa; it; it = it->ifa_next) {
+            if (it->ifa_addr && it->ifa_addr->sa_family == AF_INET) {
+                const struct sockaddr_in* const sa = (struct sockaddr_in*)it->ifa_addr;
+                if (sa->sin_addr.s_addr == addr_be) {
+                    idx = if_nametoindex(it->ifa_name);
+                    break;
+                }
+            }
+        }
+        freeifaddrs(ifa);
+    }
+    return idx;
+}
+
+int16_t udp_tx_init(struct udp_tx_t* const self, const uint32_t local_iface_address, uint16_t* const local_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0)) {
@@ -68,12 +98,12 @@ int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_ifa
     return res;
 }
 
-int16_t udp_tx_send(struct udp_tx_handle_t* const self,
-                    const uint32_t                remote_address,
-                    const uint16_t                remote_port,
-                    const uint8_t                 dscp,
-                    const size_t                  payload_size,
-                    const void* const             payload)
+int16_t udp_tx_send(struct udp_tx_t* const self,
+                    const uint32_t         remote_address,
+                    const uint16_t         remote_port,
+                    const uint8_t          dscp,
+                    const size_t           payload_size,
+                    const void* const      payload)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (self->fd >= 0) && (remote_address > 0) && (remote_port > 0) && (payload != NULL) &&
@@ -99,7 +129,7 @@ int16_t udp_tx_send(struct udp_tx_handle_t* const self,
     return res;
 }
 
-void udp_tx_close(struct udp_tx_handle_t* const self)
+void udp_tx_close(struct udp_tx_t* const self)
 {
     if ((self != NULL) && (self->fd >= 0)) {
         (void)close(self->fd);
@@ -107,24 +137,30 @@ void udp_tx_close(struct udp_tx_handle_t* const self)
     }
 }
 
-int16_t udp_rx_init(struct udp_rx_handle_t* const self,
-                    const uint32_t                local_iface_address,
-                    const uint32_t                multicast_group,
-                    const uint16_t                remote_port)
+int16_t udp_rx_init(struct udp_rx_t* const self,
+                    const uint32_t         local_iface_address,
+                    const uint32_t         multicast_group,
+                    const uint16_t         remote_port,
+                    const uint16_t         deny_source_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0) && is_multicast(multicast_group) && (remote_port > 0)) {
-        const int reuse = 1;
-        self->fd        = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        bool ok         = self->fd >= 0;
+        const int one             = 1;
+        self->deny_source_address = local_iface_address;
+        self->deny_source_port    = deny_source_port;
+        self->allow_iface_index   = get_local_iface_index(local_iface_address);
+        self->fd                  = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        bool ok                   = (self->fd >= 0) && (self->allow_iface_index > 0);
         // Set non-blocking mode.
         ok = ok && (fcntl(self->fd, F_SETFL, O_NONBLOCK) == 0);
         // Allow other applications to use the same Cyphal port as well. This must be done before binding.
         // Failure to do so will make it impossible to run more than one Cyphal/UDP node on the same host.
-        ok = ok && (setsockopt(self->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == 0);
+        ok = ok && (setsockopt(self->fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0);
 #ifdef SO_REUSEPORT // Linux
-        ok = ok && (setsockopt(self->fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) == 0);
+        ok = ok && (setsockopt(self->fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) == 0);
 #endif
+        // Request extended metadata on rx so that we could only accept traffic from our own iface.
+        ok = ok && (setsockopt(self->fd, IPPROTO_IP, IP_PKTINFO, &one, sizeof(one)) == 0);
         // Binding to the multicast group address is necessary on GNU/Linux: https://habr.com/ru/post/141021/
         // Binding to a multicast address is not allowed on Windows, and it is not necessary there;
         // instead, one should bind to INADDR_ANY with the specific port.
@@ -155,26 +191,40 @@ int16_t udp_rx_init(struct udp_rx_handle_t* const self,
     return res;
 }
 
-int16_t udp_rx_receive(struct udp_rx_handle_t* const self,
-                       size_t* const                 inout_payload_size,
-                       void* const                   out_payload,
-                       uint32_t* const               out_remote_address,
-                       uint16_t* const               out_remote_port)
+int16_t udp_rx_receive(struct udp_rx_t* const self, size_t* const inout_payload_size, void* const out_payload)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (self->fd >= 0) && (inout_payload_size != NULL) && (out_payload != NULL)) {
-        struct sockaddr_in src     = { 0 };
-        socklen_t          src_len = sizeof(src);
-        const ssize_t      recv_result =
-          recvfrom(self->fd, out_payload, *inout_payload_size, MSG_DONTWAIT, (struct sockaddr*)&src, &src_len);
-        if (recv_result >= 0) {
-            *inout_payload_size = (size_t)recv_result;
-            res                 = 1;
-            if (out_remote_address != NULL) {
-                *out_remote_address = ntohl(src.sin_addr.s_addr);
+        struct sockaddr_in src = { 0 };
+        struct iovec       iov = { .iov_base = out_payload, .iov_len = *inout_payload_size };
+        char               cbuf[CMSG_SPACE(sizeof(struct in_pktinfo))];
+        struct msghdr      msg = { .msg_name       = &src,
+                                   .msg_namelen    = sizeof(src),
+                                   .msg_iov        = &iov,
+                                   .msg_iovlen     = 1,
+                                   .msg_control    = cbuf,
+                                   .msg_controllen = sizeof(cbuf) };
+        const ssize_t      n   = recvmsg(self->fd, &msg, MSG_DONTWAIT);
+        if (n >= 0) {
+            // locate IP_PKTINFO
+            struct in_pktinfo* pi = NULL;
+            for (struct cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+                if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
+                    pi = (struct in_pktinfo*)CMSG_DATA(c);
+                    break;
+                }
             }
-            if (out_remote_port != NULL) {
-                *out_remote_port = ntohs(src.sin_port);
+            // drop out own traffic and only accept packets from the right iface.
+            if (pi == NULL) {
+                res = -EIO;
+            } else if (pi->ipi_ifindex != self->allow_iface_index) {
+                res = 0; // wrong iface -- ignore
+            } else if ((ntohl(src.sin_addr.s_addr) == self->deny_source_address) &&
+                       (ntohs(src.sin_port) == self->deny_source_port)) {
+                res = 0; // own traffic -- ignore
+            } else {
+                *inout_payload_size = (size_t)n;
+                res                 = 1;
             }
         } else if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
             res = 0;
@@ -185,7 +235,7 @@ int16_t udp_rx_receive(struct udp_rx_handle_t* const self,
     return res;
 }
 
-void udp_rx_close(struct udp_rx_handle_t* const self)
+void udp_rx_close(struct udp_rx_t* const self)
 {
     if ((self != NULL) && (self->fd >= 0)) {
         (void)close(self->fd);
@@ -193,11 +243,11 @@ void udp_rx_close(struct udp_rx_handle_t* const self)
     }
 }
 
-int16_t udp_wait(const uint64_t                 timeout_us,
-                 const size_t                   tx_count,
-                 struct udp_tx_handle_t** const tx,
-                 const size_t                   rx_count,
-                 struct udp_rx_handle_t** const rx)
+int16_t udp_wait(const uint64_t          timeout_us,
+                 const size_t            tx_count,
+                 struct udp_tx_t** const tx,
+                 const size_t            rx_count,
+                 struct udp_rx_t** const rx)
 {
     int16_t       res         = -EINVAL;
     const size_t  total_count = tx_count + rx_count;

@@ -158,7 +158,8 @@ static cy_err_t transport_subscribe(struct cy_topic_t* const cy_topic)
             res = udp_rx_init(&topic->sock_rx[i],
                               cy_udp->io[i].local_iface_address,
                               topic->sub.udp_ip_endpoint.ip_address,
-                              topic->sub.udp_ip_endpoint.udp_port);
+                              topic->sub.udp_ip_endpoint.udp_port,
+                              cy_udp->io[i].tx_local_port);
         }
     }
 
@@ -318,11 +319,11 @@ hell:
 /// a separate array.
 struct topic_scan_context_rx_t
 {
-    size_t                   count;
-    size_t                   capacity;
-    struct udp_rx_handle_t** handles;
-    struct cy_udp_topic_t**  topics;
-    uint_fast8_t*            iface_indexes;
+    size_t                  count;
+    size_t                  capacity;
+    struct udp_rx_t**       handles;
+    struct cy_udp_topic_t** topics;
+    uint_fast8_t*           iface_indexes;
 };
 
 static void on_topic_for_each(struct cy_topic_t* const cy_topic, void* const user)
@@ -350,8 +351,8 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     tx_offload(cy_udp); // Free up space in the TX queues and ensure all TX sockets are blocked.
 
     // Fill out the TX awaitable array. May be empty if there's nothing to transmit at the moment.
-    size_t                  tx_count                         = 0;
-    struct udp_tx_handle_t* tx_await[CY_UDP_IFACE_COUNT_MAX] = { 0 };
+    size_t           tx_count                         = 0;
+    struct udp_tx_t* tx_await[CY_UDP_IFACE_COUNT_MAX] = { 0 };
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         if (cy_udp->io[i].tx.queue_size > 0) { // There's something to transmit!
             tx_await[tx_count] = &cy_udp->io[i].tx_sock;
@@ -364,10 +365,10 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     // so we simply use the total number of topics; it's a bit wasteful but it's not a huge deal and we definitely
     // don't want to scan the topic index to count the ones we are subscribed to.
     // This is a rather cumbersome operation as we need to traverse the topic tree; perhaps we should switch to epoll?
-    const size_t            max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
-    struct udp_rx_handle_t* rx_await[max_rx_count]; // Initialization is not possible and is very wasteful anyway.
-    struct cy_udp_topic_t*  rx_topics[max_rx_count];
-    uint_fast8_t            rx_iface_indexes[max_rx_count];
+    const size_t           max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
+    struct udp_rx_t*       rx_await[max_rx_count]; // Initialization is not possible and is very wasteful anyway.
+    struct cy_udp_topic_t* rx_topics[max_rx_count];
+    uint_fast8_t           rx_iface_indexes[max_rx_count];
     struct topic_scan_context_rx_t rx_ctx = {
         .count         = 0,
         .capacity      = max_rx_count,
@@ -406,10 +407,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         }
 
         // Read the data from the socket into the buffer we just allocated.
-        uint32_t      remote_address = 0;
-        uint16_t      remote_port    = 0;
-        const int16_t rx_result = udp_rx_receive(rx_await[i], &dgram.size, dgram.data, &remote_address, &remote_port);
-        assert(0 != rx_result);
+        const int16_t rx_result = udp_rx_receive(rx_await[i], &dgram.size, dgram.data);
         if (rx_result < 0) {
             // We end up here if the socket was closed while processing another datagram.
             // This happens if a subscriber chose to unsubscribe dynamically.
@@ -418,21 +416,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             topic->rx_sock_err_handler(topic, iface_index, rx_result);
             continue;
         }
-
-        // Discard own traffic looped back from the TX socket to the RX socket.
-        // Observe that this will be happening every time we send something, which is inefficient.
-        // Notice that we have to compare the remote endpoint against EVERY local TX endpoint, because a mcast dgram
-        // sent over one iface will be delivered to sockets that joined that mcast grp on all other ifaces.
-        // Perhaps we should filter by iface index in the udp.h module?
-        // Anyway, is there a sane way of not receiving our own datagrams?
-        bool own_loopback = false;
-        for (size_t k = 0; k < CY_UDP_IFACE_COUNT_MAX; k++) {
-            if ((remote_address == cy_udp->io[k].local_iface_address) && (remote_port == cy_udp->io[k].tx_local_port)) {
-                own_loopback = true;
-                break;
-            }
-        }
-        if (own_loopback) {
+        if (rx_result == 0) { // Nothing to read OR dgram dropped by filters (own traffic or wrong iface).
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
             continue;
         }

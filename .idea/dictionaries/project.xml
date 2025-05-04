@@ -3,9 +3,11 @@
     <words>
       <w>ards</w>
       <w>bday</w>
+      <w>cbuf</w>
       <w>csma</w>
       <w>cyphal</w>
       <w>cyudp</w>
+      <w>dgrams</w>
       <w>dscp</w>
       <w>gettime</w>
       <w>ifaces</w>
@@ -15,6 +17,7 @@
       <w>libserard</w>
       <w>libudpard</w>
       <w>opencyphal</w>
+      <w>pktinfo</w>
       <w>popcount</w>
       <w>reuseport</w>
       <w>splitmix</w>

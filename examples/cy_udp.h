@@ -12,7 +12,7 @@ struct cy_udp_topic_t
 {
     struct cy_topic_t           base;
     struct UdpardRxSubscription sub;
-    struct udp_rx_handle_t      sock_rx[CY_UDP_IFACE_COUNT_MAX];
+    struct udp_rx_t             sock_rx[CY_UDP_IFACE_COUNT_MAX];
 
     /// The count of out-of-memory errors that occurred while processing this topic.
     /// Every OOM implies that either a frame or a full transfer were lost.
@@ -33,10 +33,10 @@ struct cy_udp_t
 
     struct
     {
-        struct UdpardTx        tx;
-        struct udp_tx_handle_t tx_sock;
-        uint16_t               tx_local_port;
-        uint32_t               local_iface_address;
+        struct UdpardTx tx;
+        struct udp_tx_t tx_sock;
+        uint16_t        tx_local_port;
+        uint32_t        local_iface_address;
 
         /// Number of tx frames that have timed out while waiting in the queue.
         uint64_t tx_timeout_count;
