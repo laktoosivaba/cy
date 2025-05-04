@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef CY_CONFIG_TRACE
+#define CY_CONFIG_TRACE 0
+#endif
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -413,7 +417,8 @@ extern void cy_trace(struct cy_t* const  cy,
   ;
 
 /// This convenience macro is defined in the header file to enable reuse in other modules.
-#if defined(CY_CONFIG_TRACE) && CY_CONFIG_TRACE
+/// The newline at the end is not included in the format string.
+#if CY_CONFIG_TRACE
 #define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __VA_ARGS__)
 #else
 #define CY_TRACE(cy, ...) (void)0

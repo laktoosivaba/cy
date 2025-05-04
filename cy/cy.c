@@ -21,6 +21,20 @@ static size_t smaller(const size_t a, const size_t b)
     return (a < b) ? a : b;
 }
 
+#if CY_CONFIG_TRACE
+
+size_t popcount_all(const size_t nbits, const void* x)
+{
+    size_t               out = 0;
+    const uint8_t* const p   = (const uint8_t*)x;
+    for (size_t i = 0; i < (nbits / 8U); i++) {
+        out += (size_t)__builtin_popcount(p[i]);
+    }
+    return out;
+}
+
+#endif
+
 // ----------------------------------------  CRC-64/WE  ----------------------------------------
 
 #define CRC64WE_INITIAL UINT64_MAX
@@ -249,7 +263,7 @@ static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* co
     assert(node_id < node_id_max);
     assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
     bloom64_set(bloom_capacity, (uint64_t*)bloom, node_id);
-    return node_id;
+    return (uint16_t)node_id;
 }
 
 // ReSharper restore CppDFAConstantParameter
@@ -528,12 +542,18 @@ void cy_ingest(struct cy_topic_t* const        topic,
     struct cy_t* const cy = topic->cy;
 
     // We snoop on all transfers to update the node-ID occupancy Bloom filter.
-    // If we don't have a node-ID and this is a newly discovered node, follow CSMA/CD: add random wait.
+    // If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
     // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
     if ((cy->node_id > cy->node_id_max) &&
         !bloom64_get(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id)) {
         // The mean extra time is chosen to be simply one heartbeat period.
         cy->heartbeat_next_us += random_uint(0, 2 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
+        CY_TRACE(cy,
+                 "Discovered neighbor %u publishing on '%s'@%u. New Bloom popcount %zu",
+                 metadata.remote_node_id,
+                 topic->name,
+                 topic->subject_id,
+                 popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom) + 1U);
     }
     bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id);
 
@@ -562,6 +582,11 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
         cy->node_id = allocate_node_id(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id_max);
         assert(cy->node_id <= cy->node_id_max);
         res = cy->transport.set_node_id(cy);
+        CY_TRACE(cy,
+                 "Allocated node-ID %u; Bloom popcount %zu; set_node_id()->%d",
+                 cy->node_id,
+                 popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom),
+                 res);
     }
     assert(cy->node_id <= cy->node_id_max);
     if (res < 0) {
@@ -585,6 +610,10 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic)
 {
     // Schedule the topic for gossiping ASAP, unless it is already scheduled.
     if ((topic != NULL) && (topic->last_gossip_us > 0)) {
+        CY_TRACE(topic->cy,
+                 "Discriminator collision on '%s'@%u. Scheduling to gossip on next heartbeat.",
+                 topic->name,
+                 topic->subject_id);
         struct cy_tree_t** const index = &topic->cy->topics_by_gossip_time;
         cavlRemove(index, &topic->index_gossip_time);
         topic->last_gossip_us = 0; // Topics with the same time will be ordered FIFO -- the tree is stable.
@@ -600,6 +629,10 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
     if (cy->node_id > cy->node_id_max) {
         return; // We are not using a node-ID, nothing to do.
     }
+    CY_TRACE(cy,
+             "Node-ID collision on %u. Bloom purge with popcount %zu",
+             cy->node_id,
+             popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom));
     // We must reset the Bloom filter because there may be tombstones in it.
     // It will be repopulated afresh during the delay we set above.
     bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
@@ -676,7 +709,17 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
           &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
     }
 
-    cy->topic_count += ok ? 1 : 0;
+    if (ok) {
+        cy->topic_count++;
+        CY_TRACE(cy,
+                 "New topic '%s'@%u [%zu total], hash %016llX, pinned %d, last gossip at %llu us",
+                 topic->name,
+                 topic->subject_id,
+                 cy->topic_count,
+                 (unsigned long long)topic->hash,
+                 pinned,
+                 (unsigned long long)topic->last_gossip_us);
+    }
     return ok;
 }
 
@@ -767,6 +810,12 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
         err               = topic->cy->transport.subscribe(topic);
         topic->sub_active = err >= 0;
     }
+    CY_TRACE(topic->cy,
+             "New subscription to '%s'@%u, extent %zu; subscribe()->%d",
+             topic->name,
+             topic->subject_id,
+             extent,
+             err);
     return err;
 }
 

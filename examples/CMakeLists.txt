@@ -6,6 +6,8 @@ enable_testing()
 
 set(lib_dir ${CMAKE_SOURCE_DIR}/lib)
 
+add_compile_definitions(CY_CONFIG_TRACE=1)
+
 # Cy static library.
 add_library(cy STATIC ${CMAKE_SOURCE_DIR}/cy/cy.c)
 target_include_directories(cy INTERFACE ${CMAKE_SOURCE_DIR}/cy)
