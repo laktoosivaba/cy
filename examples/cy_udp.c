@@ -84,11 +84,10 @@ static uint64_t now_us(struct cy_t* const cy)
     return cy_udp_now_us();
 }
 
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 static cy_err_t transport_set_node_id(struct cy_t* const cy)
 {
     assert(cy != NULL);
-    struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy;
-    (void)cy_udp;
     // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
     // so it does not require updating.
     // Currently, there is literally nothing to do. When we add services, we will need to change the RPC multicast

@@ -313,6 +313,9 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic);
 /// When the transport library detects an incoming transport frame with the same source node-ID as the local node-ID,
 /// it must notify Cy about it to let it rectify the problem. This function will immediately invoke
 /// transport.clear_node_id() and commence the new node-ID allocation process.
+/// Note that the node-ID collision checks must be done on raw transport frames, not on reassembled transfers, for
+/// two reasons: 1. this is faster, allowing quick reaction; 2. in the presence of a node-ID conflict, transfers
+/// arriving from that ID cannot be robustly reassembled.
 void cy_notify_node_id_collision(struct cy_t* const cy);
 
 /// If a node-ID is given explicitly at startup, it will be used as-is and the node will become operational immediately.
