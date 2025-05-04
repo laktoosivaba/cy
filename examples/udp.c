@@ -31,7 +31,7 @@ static bool is_multicast(const uint32_t address)
     return (address & 0xF0000000UL) == 0xE0000000UL; // NOLINT(*-magic-numbers)
 }
 
-int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address)
+int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address, uint16_t* const local_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0)) {
@@ -47,6 +47,12 @@ int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_ifa
                           .sin_port   = 0,
                         },
                         sizeof(struct sockaddr_in)) == 0;
+        if (ok && (local_port != NULL)) {
+            struct sockaddr_in sa = { 0 };
+            socklen_t          al = sizeof(sa);
+            ok                    = getsockname(self->fd, (struct sockaddr*)&sa, &al) == 0;
+            *local_port           = ntohs(sa.sin_port);
+        }
         ok = ok && fcntl(self->fd, F_SETFL, O_NONBLOCK) == 0;
         ok = ok && setsockopt(self->fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl)) == 0;
         // Specify the egress interface for multicast traffic.
@@ -149,14 +155,27 @@ int16_t udp_rx_init(struct udp_rx_handle_t* const self,
     return res;
 }
 
-int16_t udp_rx_receive(struct udp_rx_handle_t* const self, size_t* const inout_payload_size, void* const out_payload)
+int16_t udp_rx_receive(struct udp_rx_handle_t* const self,
+                       size_t* const                 inout_payload_size,
+                       void* const                   out_payload,
+                       uint32_t* const               out_remote_address,
+                       uint16_t* const               out_remote_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (self->fd >= 0) && (inout_payload_size != NULL) && (out_payload != NULL)) {
-        const ssize_t recv_result = recv(self->fd, out_payload, *inout_payload_size, MSG_DONTWAIT);
+        struct sockaddr_in src     = { 0 };
+        socklen_t          src_len = sizeof(src);
+        const ssize_t      recv_result =
+          recvfrom(self->fd, out_payload, *inout_payload_size, MSG_DONTWAIT, (struct sockaddr*)&src, &src_len);
         if (recv_result >= 0) {
             *inout_payload_size = (size_t)recv_result;
             res                 = 1;
+            if (out_remote_address != NULL) {
+                *out_remote_address = ntohl(src.sin_addr.s_addr);
+            }
+            if (out_remote_port != NULL) {
+                *out_remote_port = ntohs(src.sin_port);
+            }
         } else if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
             res = 0;
         } else {

@@ -214,7 +214,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     for (uint_fast8_t i = 0; (i < CY_UDP_IFACE_COUNT_MAX) && (res >= 0); i++) {
         if (is_valid_ip(local_iface_address[i])) {
             cy_udp->io[i].local_iface_address = local_iface_address[i];
-            res                               = udp_tx_init(&cy_udp->io[i].tx_sock, local_iface_address[i]);
+            res = udp_tx_init(&cy_udp->io[i].tx_sock, local_iface_address[i], &cy_udp->io[i].tx_local_port);
         } else {
             cy_udp->io[i].tx.queue_capacity = 0;
         }
@@ -386,8 +386,6 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     const uint64_t ts_us = cy_udp_now_us(); // immediately after unblocking
 
     // Process readable handles. The writable ones will be taken care of later.
-    // TODO FIXME PROBLEM: FILTER OUT OWN TRAFFIC LOOPED BACK HERE FROM THE SAME PROCESS!
-    // TODO FIXME PROBLEM: CAN'T USE IP ADDRESS -- BREAKS ON LOOPBACK INTERFACE!
     for (size_t i = 0; i < rx_ctx.count; i++) {
         if (rx_await[i] == NULL) {
             continue; // Not ready for reading.
@@ -408,7 +406,9 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         }
 
         // Read the data from the socket into the buffer we just allocated.
-        const int16_t rx_result = udp_rx_receive(rx_await[i], &dgram.size, dgram.data);
+        uint32_t      remote_address = 0;
+        uint16_t      remote_port    = 0;
+        const int16_t rx_result = udp_rx_receive(rx_await[i], &dgram.size, dgram.data, &remote_address, &remote_port);
         assert(0 != rx_result);
         if (rx_result < 0) {
             // We end up here if the socket was closed while processing another datagram.
@@ -416,6 +416,24 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
             cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
             assert(topic->rx_sock_err_handler != NULL);
             topic->rx_sock_err_handler(topic, iface_index, rx_result);
+            continue;
+        }
+
+        // Discard own traffic looped back from the TX socket to the RX socket.
+        // Observe that this will be happening every time we send something, which is inefficient.
+        // Notice that we have to compare the remote endpoint against EVERY local TX endpoint, because a mcast dgram
+        // sent over one iface will be delivered to sockets that joined that mcast grp on all other ifaces.
+        // Perhaps we should filter by iface index in the udp.h module?
+        // Anyway, is there a sane way of not receiving our own datagrams?
+        bool own_loopback = false;
+        for (size_t k = 0; k < CY_UDP_IFACE_COUNT_MAX; k++) {
+            if ((remote_address == cy_udp->io[k].local_iface_address) && (remote_port == cy_udp->io[k].tx_local_port)) {
+                own_loopback = true;
+                break;
+            }
+        }
+        if (own_loopback) {
+            cy_udp->mem.deallocate(cy_udp->mem.user_reference, RX_BUFFER_SIZE, dgram.data);
             continue;
         }
 

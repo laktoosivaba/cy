@@ -46,8 +46,14 @@ struct udp_rx_handle_t
 /// The local iface address is used to specify the egress interface for multicast traffic.
 /// Per LibUDPard design, there is one TX socket per redundant interface, so the application needs to invoke
 /// this function once per interface.
+///
+/// The local port will be chosen automatically (ephemeral); if the local_port pointer is not NULL, the actual port
+/// number will be stored there. This should be used later to drop datagrams looped back from the TX socket to the
+/// local RX sockets by comparing the origin endpoint of the received datagrams with the local port & iface address
+/// of the TX socket. I am not sure if there is a better way of ignoring own datagrams.
+///
 /// On error returns a negative error code.
-int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address);
+int16_t udp_tx_init(struct udp_tx_handle_t* const self, const uint32_t local_iface_address, uint16_t* const local_port);
 
 /// Send a datagram to the specified endpoint without blocking using the specified IP DSCP field value.
 /// A real-time embedded system should normally accept a transmission deadline here for the networking stack.
@@ -76,8 +82,16 @@ int16_t udp_rx_init(struct udp_rx_handle_t* const self,
 /// Read one datagram from the socket without blocking.
 /// The size of the destination buffer is specified in inout_payload_size; it is updated to the actual size of the
 /// received datagram upon return.
+///
+/// The remote address and port are reported to allow the reader filter out own datagrams that were looped back
+/// from the TX socket to the local RX sockets.
+///
 /// Returns 1 on success, 0 if the socket is not ready for reading, or a negative error code.
-int16_t udp_rx_receive(struct udp_rx_handle_t* const self, size_t* const inout_payload_size, void* const out_payload);
+int16_t udp_rx_receive(struct udp_rx_handle_t* const self,
+                       size_t* const                 inout_payload_size,
+                       void* const                   out_payload,
+                       uint32_t* const               out_remote_address,
+                       uint16_t* const               out_remote_port);
 
 /// No effect if the argument is invalid.
 /// This function is guaranteed to invalidate the handle.

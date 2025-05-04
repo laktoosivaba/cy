@@ -35,6 +35,7 @@ struct cy_udp_t
     {
         struct UdpardTx        tx;
         struct udp_tx_handle_t tx_sock;
+        uint16_t               tx_local_port;
         uint32_t               local_iface_address;
 
         /// Number of tx frames that have timed out while waiting in the queue.
