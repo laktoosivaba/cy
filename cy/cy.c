@@ -172,10 +172,13 @@ static uint64_t splitmix64(void)
     return z ^ (z >> 31U);
 }
 
-/// The limits are inclusive. Result undefined unless min < max.
+/// The limits are inclusive. Returns min unless min < max.
 static uint64_t random_uint(const uint64_t min, const uint64_t max)
 {
-    return (splitmix64() % (max - min)) + min;
+    if (min < max) {
+        return (splitmix64() % (max - min)) + min;
+    }
+    return min;
 }
 
 // ----------------------------------------  NODE ID ALLOCATION  ----------------------------------------
@@ -213,8 +216,9 @@ static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
 static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* const bloom, const uint16_t node_id_max)
 {
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
+    // This somewhat undermines the randomness of the result, but it is fast and simple.
     const size_t num_words  = (smaller(node_id_max, bloom_capacity) + 63U) / 64U;
-    uint16_t     word_index = (uint16_t)random_uint(0U, num_words - 1U);
+    size_t       word_index = (size_t)random_uint(0U, num_words - 1U);
     for (size_t i = 0; i < num_words; i++) {
         if (bloom[word_index] != UINT64_MAX) {
             break;
@@ -225,13 +229,23 @@ static uint16_t allocate_node_id(const size_t bloom_capacity, const uint64_t* co
     if (word == UINT64_MAX) {
         return (uint16_t)random_uint(0U, node_id_max); // The filter is full, fallback to random node-ID.
     }
+
     // Now we have a word with at least one zero bit. Find a random zero bit in it.
     uint8_t bit_index = (uint8_t)random_uint(0U, 63U);
     assert(word != UINT64_MAX);
     while ((word & (1ULL << bit_index)) != 0) { // guaranteed to terminate, see above.
         bit_index = (bit_index + 1U) % 64U;
     }
-    const uint16_t node_id = (uint16_t)((word_index * 64U) + bit_index);
+
+    // Now we have some valid node-ID. Recall that the Bloom filter maps multiple values to the same bit.
+    // This means that we can increase randomness by multiplying the node-ID by a multiple of the Bloom filter period.
+    size_t node_id = (word_index * 64U) + bit_index;
+    assert(node_id < node_id_max);
+    assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
+    const size_t oversubscription = (size_t)(node_id_max / bloom_capacity);
+    if (oversubscription > 0) {
+        node_id += (size_t)random_uint(0, oversubscription) * bloom_capacity;
+    }
     assert(node_id < node_id_max);
     assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
     bloom64_set(bloom_capacity, (uint64_t*)bloom, node_id);

@@ -399,6 +399,26 @@ cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_u
 /// Example: "/foo//bar/" -> "/foo/bar"
 bool cy_canonicalize(char* const topic_name);
 
+/// For diagnostics and logging only. Do not use in embedded and real-time applications.
+/// This function is only required if CY_CONFIG_TRACE is defined and is nonzero; otherwise it should be left undefined.
+/// Other modules that build on Cy can also use it; e.g., transport-specific glue modules.
+extern void cy_trace(struct cy_t* const  cy,
+                     const char* const   file,
+                     const uint_fast16_t line,
+                     const char* const   format,
+                     ...)
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((__format__(__printf__, 4, 5)))
+#endif
+  ;
+
+/// This convenience macro is defined in the header file to enable reuse in other modules.
+#if defined(CY_CONFIG_TRACE) && CY_CONFIG_TRACE
+#define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __VA_ARGS__)
+#else
+#define CY_TRACE(cy, ...) (void)0
+#endif
+
 #ifdef __cplusplus
 }
 #endif
