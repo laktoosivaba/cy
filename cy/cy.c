@@ -586,13 +586,13 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
     if (cy->node_id > cy->node_id_max) {
         return; // We are not using a node-ID, nothing to do.
     }
-    // Restart the node-ID allocation process.
-    cy->transport.clear_node_id(cy);
-    cy->node_id = CY_NODE_ID_INVALID;
-    cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
     // We must reset the Bloom filter because there may be tombstones in it.
     // It will be repopulated afresh during the delay we set above.
     bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
+    // Restart the node-ID allocation process.
+    cy->node_id = CY_NODE_ID_INVALID;
+    cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
+    cy->transport.clear_node_id(cy);
 }
 
 bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name)
