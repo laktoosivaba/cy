@@ -554,8 +554,8 @@ void cy_ingest(struct cy_topic_t* const        topic,
     // If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
     // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
     if ((cy->node_id > cy->node_id_max) && !bloom64_get(&cy->node_id_bloom, metadata.remote_node_id)) {
-        // The mean extra time is chosen to be simply one heartbeat period.
-        cy->heartbeat_next_us += random_uint(0, 2 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
+        // The mean extra time is chosen to be simply two heartbeat periods.
+        cy->heartbeat_next_us += random_uint(1, 3 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
         CY_TRACE(cy,
                  "Discovered neighbor %u publishing on '%s'@%u; new Bloom popcount %zu",
                  metadata.remote_node_id,

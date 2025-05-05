@@ -344,6 +344,7 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic);
 /// 2. The node-ID space and the optimal allocation strategy (Bloom filter size) are dependent on the transport layer!
 /// 3. HETEROGENEOUS REDUNDANT INTERFACES MAY HAVE TO USE DIFFERENT NODE-IDS, and attempting to allocate a shared one
 /// is at least inefficient, at most impossible!
+/// 4. With named topics in place, no entity above the transport layer cares about the node-ID value.
 void cy_notify_node_id_collision(struct cy_t* const cy);
 
 /// If a node-ID is given explicitly at startup, it will be used as-is and the node will become operational immediately.

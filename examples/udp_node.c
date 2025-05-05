@@ -1,7 +1,6 @@
 #include "cy_udp.h"
 #include <time.h>
 #include <stdio.h>
-#include <ctype.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -17,7 +16,7 @@ static uint64_t random_uid(void)
 }
 
 /// FNV1A 64-bit
-static uint64_t arg_key_hash(const char* s)
+static uint64_t arg_kv_hash(const char* s)
 {
     static const uint64_t prime = 1099511628211ULL;
     uint64_t              h     = 14695981039346656037ULL;
@@ -32,7 +31,7 @@ struct arg_kv_t
 {
     size_t      index;    ///< Argument index, where 0 is the program name.
     const char* key;      ///< NULL key indicates that no more arguments are available.
-    uint64_t    key_hash; ///< arg_key_hash(key); 0 if no key.
+    uint64_t    key_hash; ///< arg_kv_hash(key); 0 if no key.
     const char* value;    ///< NULL unless the argument matches "key=value". May be empty if "key=".
 };
 
@@ -57,7 +56,7 @@ static struct arg_kv_t arg_kv_next(const int argc, char* argv[])
             *q        = '\0';
             out.value = q + 1;
         }
-        out.key_hash = arg_key_hash(out.key);
+        out.key_hash = arg_kv_hash(out.key);
     }
     return out;
 }
@@ -65,6 +64,8 @@ static struct arg_kv_t arg_kv_next(const int argc, char* argv[])
 struct config_topic_t
 {
     const char* name;
+    bool        pub;
+    bool        sub;
 };
 
 struct config_t
@@ -93,17 +94,27 @@ struct config_t load_config(const int argc, char* argv[])
     size_t          iface_count = 0;
     struct arg_kv_t arg;
     while ((arg = arg_kv_next(argc, argv)).key_hash != 0) {
-        if ((arg_key_hash("iface") == arg.key_hash) && (iface_count < CY_UDP_IFACE_COUNT_MAX)) {
+        if ((arg_kv_hash("iface") == arg.key_hash) && (iface_count < CY_UDP_IFACE_COUNT_MAX)) {
             cfg.iface_address[iface_count++] = udp_parse_iface_address(arg.value);
-        } else if (arg_key_hash("uid") == arg.key_hash) {
+        } else if (arg_kv_hash("uid") == arg.key_hash) {
             cfg.local_uid = strtoull(arg.value, NULL, 0);
-        } else if (arg_key_hash("node_id") == arg.key_hash) {
+        } else if (arg_kv_hash("node_id") == arg.key_hash) {
             cfg.local_node_id = (uint16_t)strtoul(arg.value, NULL, 0);
-        } else if (arg_key_hash("tx_queue_capacity") == arg.key_hash) {
+        } else if (arg_kv_hash("tx_queue_capacity") == arg.key_hash) {
             cfg.tx_queue_capacity_per_iface = strtoul(arg.value, NULL, 0);
-        } else if (arg.key[0] == '/') {
-            cfg.topics[cfg.topic_count].name = arg.key;
-            cfg.topic_count++;
+        } else if ((arg_kv_hash("pub") == arg.key_hash) || (arg_kv_hash("sub") == arg.key_hash)) {
+            struct config_topic_t* topic = NULL;
+            for (size_t i = 0; i < cfg.topic_count; i++) {
+                if (strcmp(cfg.topics[i].name, arg.value) == 0) {
+                    topic = &cfg.topics[i];
+                }
+            }
+            if (topic == NULL) {
+                topic = &cfg.topics[cfg.topic_count++];
+            }
+            topic->name = arg.value;
+            topic->pub  = topic->pub || (arg_kv_hash("pub") == arg.key_hash);
+            topic->sub  = topic->sub || (arg_kv_hash("sub") == arg.key_hash);
         } else {
             fprintf(stderr, "Unexpected key #%zu: '%s'\n", arg.index, arg.key);
             exit(1);
@@ -117,11 +128,11 @@ struct config_t load_config(const int argc, char* argv[])
     }
     fprintf(stderr, "\nid: 0x%016llx %04x\n", (unsigned long long)cfg.local_uid, cfg.local_node_id);
     fprintf(stderr, "tx_queue_capacity: %zu\n", cfg.tx_queue_capacity_per_iface);
-    fprintf(stderr, "topics:");
+    fprintf(stderr, "topics:\n");
     for (size_t i = 0; i < cfg.topic_count; i++) {
-        fprintf(stderr, "\t%s", cfg.topics[i].name);
+        fprintf(stderr, "\t%s\n", cfg.topics[i].name);
     }
-    fprintf(stderr, "\n---\n");
+    fprintf(stderr, "---\n");
     return cfg;
 }
 
@@ -178,19 +189,21 @@ int main(const int argc, char* argv[])
             fprintf(stderr, "cy_udp_topic_new: %d\n", res);
             return 1;
         }
-        // Subscribe to the topic.
-        res = cy_udp_subscribe(&topics[i], //
-                               &subs[i],
-                               1024 * 1024,
-                               CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
-                               tracing_subscription_callback);
-        if (res < 0) {
-            fprintf(stderr, "cy_udp_subscribe: %d\n", res);
-            return 1;
+        if (cfg.topics[i].sub) {
+            res = cy_udp_subscribe(&topics[i], //
+                                   &subs[i],
+                                   1024 * 1024,
+                                   CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
+                                   tracing_subscription_callback);
+            if (res < 0) {
+                fprintf(stderr, "cy_udp_subscribe: %d\n", res);
+                return 1;
+            }
         }
     }
 
     // Spin the event loop and publish on the topics.
+    uint64_t next_publish_at = cy_udp_now_us() + 1000000U;
     while (true) {
         const cy_err_t err_spin = cy_udp_spin_once(&cy_udp);
         if (err_spin < 0) {
@@ -198,7 +211,25 @@ int main(const int argc, char* argv[])
             break;
         }
 
-        // TODO: topic publication
+        const uint64_t now = cy_udp_now_us();
+        if (now >= next_publish_at) {
+            if (cy_has_node_id(&cy_udp.base)) {
+                for (size_t i = 0; i < cfg.topic_count; i++) {
+                    if (!cfg.topics[i].pub) {
+                        continue;
+                    }
+                    char msg[256];
+                    sprintf(msg, "Hello from %08llx.", (unsigned long long)cy_udp.base.uid);
+                    const struct cy_payload_t payload = { .data = msg, .size = strlen(msg) };
+                    const cy_err_t            pub_res = cy_udp_publish(&topics[i], now + 100000, payload);
+                    if (pub_res < 0) {
+                        fprintf(stderr, "cy_udp_publish: %d\n", pub_res);
+                        break;
+                    }
+                }
+            }
+            next_publish_at += 1000000U;
+        }
     }
 
     return 0;
