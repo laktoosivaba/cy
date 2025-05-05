@@ -123,7 +123,7 @@ static cy_err_t transport_publish(struct cy_topic_t* const  topic,
             const int32_t e = udpardTxPublish(&cy_udp->io[i].tx,
                                               tx_deadline_us,
                                               (enum UdpardPriority)topic->pub_priority,
-                                              topic->subject_id,
+                                              cy_topic_get_subject_id(topic),
                                               topic->pub_transfer_id,
                                               (struct UdpardPayload){ .size = payload.size, .data = payload.data },
                                               NULL);
@@ -145,8 +145,10 @@ static cy_err_t transport_subscribe(struct cy_topic_t* const cy_topic)
     const struct cy_udp_t* const cy_udp = (struct cy_udp_t*)cy_topic->cy;
 
     // Set up the udpard subscription. This does not yet allocate any resources.
-    cy_err_t res =
-      (cy_err_t)udpardRxSubscriptionInit(&topic->sub, cy_topic->subject_id, cy_topic->sub_extent, cy_udp->rx_mem);
+    cy_err_t res = (cy_err_t)udpardRxSubscriptionInit(&topic->sub, //
+                                                      cy_topic_get_subject_id(cy_topic),
+                                                      cy_topic->sub_extent,
+                                                      cy_udp->rx_mem);
     if (res < 0) {
         return res; // No cleanup needed, no resources allocated yet.
     }

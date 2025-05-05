@@ -185,7 +185,10 @@ struct cy_topic_t
     /// About 2.7e-14, or one in 37 trillion.
     /// For pinned topics, the name hash equals the subject-ID.
     uint64_t hash;
-    uint16_t subject_id; // TODO: ONLY LAMPORT CLOCK IS NEEDED!
+
+    /// The lamport clock MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
+    /// Remember that the subject-ID is (for non-pinned topics): (hash+lamport_clock)%topic_count.
+    uint64_t lamport_clock;
 
     /// Updated whenever the topic is gossiped.
     ///
@@ -395,6 +398,8 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t s
 void cy_topic_for_each(struct cy_t* const cy,
                        void (*callback)(struct cy_topic_t* const topic, void* const user),
                        void* const user);
+
+uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic);
 
 static inline bool cy_topic_has_local_publishers(const struct cy_topic_t* const topic)
 {

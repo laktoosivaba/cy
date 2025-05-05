@@ -136,10 +136,11 @@ struct config_t load_config(const int argc, char* argv[])
     return cfg;
 }
 
-void tracing_subscription_callback(struct cy_subscription_t* subscription,
-                                   uint64_t                  timestamp_us,
-                                   struct cy_transfer_meta_t metadata,
-                                   struct cy_payload_t       payload)
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+void tracing_subscription_callback(struct cy_subscription_t* const subscription,
+                                   const uint64_t                  timestamp_us,
+                                   const struct cy_transfer_meta_t metadata,
+                                   const struct cy_payload_t       payload)
 {
     // Convert payload to hex.
     char hex[payload.size * 2 + 1];
@@ -150,7 +151,7 @@ void tracing_subscription_callback(struct cy_subscription_t* subscription,
     // Log the message.
     CY_TRACE(subscription->topic->cy,
              "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s: %s",
-             subscription->topic->subject_id,
+             cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
              payload.size,

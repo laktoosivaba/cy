@@ -33,7 +33,7 @@ UID.0.1 uid
 
 @assert _offset_ == {128}
 
-TopicGossip.0.1 topic_gossip
-# Carries a single entry from the CRDT topic table.
+Gossip.0.1 gossip
+# Carries a single CRDT gossip item.
 
 @extent 200 * 8

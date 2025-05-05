@@ -1,0 +1,34 @@
+# Come back later.
+
+uint64 value
+
+uint64 key_hash
+# The hash is computed as:
+#
+# - If the key names a pinned topic, which means it matches "^/([1-9][0-9]{0,4})$", where the capture group
+#   is the pinned subject-ID, then the hash is simply the pinned subject-ID. Pinned topic names always have the
+#   canonical form, which can be seen from the pattern, meaning that for any subject-ID there is exactly one
+#   pinned topic name encoding it.
+#
+# - Otherwise, the hash is currently computed as CRC-64-WE of the key, which is bad.
+#   Later we will switch to a different hash that offers better statistical properties, perhaps rapidhash64.
+#   Obviously, all nodes shall use the same hash function applied to the canonical key.
+#
+# The reason the hash is here is that its computation is expensive, and we want to avoid recomputing it for every
+# received gossip message, since there is necessarily a large number of them. We still need to transmit the full
+# key because it is necessary for wildcard matching, and also for monitoring purposes (less important).
+
+uint8 KEY_CAPACITY = 95
+# Large keys increase the CRDT gossip traffic, so they are unlikely to be useful; plus they affect the memory
+# footprint of protocol data structures. In practice, DDS and ROS topics longer than 80 characters are exceedingly
+# rare, even though the actual limit there is 256 bytes.
+#
+# CAN FD networks should avoid long keys to avoid multi-frame heartbeats.
+#
+# The value is chosen such that the total size of the message is a multiple of 8 bytes,
+# which simplifies memory aliasing of C structures.
+
+utf8[<=KEY_CAPACITY] key
+# An empty key is not a valid key.
+
+@sealed
