@@ -487,19 +487,12 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     (void)ts_us;
     (void)transfer;
 
-    // Deserialize the message.
-    // We don't need the full name, only the first character for resource kind check, so we don't deserialize full name.
-    // TODO: this is not a proper deserialization, we need to do it properly.
+    // Deserialize the message. TODO: deserialize properly.
     struct heartbeat_t heartbeat = { 0 };
-    memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat) /* -CY_TOPIC_NAME_MAX+1 */));
+    memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat)));
     const struct topic_gossip_t* const other = &heartbeat.topic_gossip;
     // Even though we may not always deserialize the full name, we do always deserialize the name length field.
-    if ((other->name_length == 0) || (other->name_length > CY_TOPIC_NAME_MAX)) {
-        return; // Malformed message.
-    }
-
-    // Check the kind of the resource. Canonical topic names must begin with a slash.
-    if (other->name[0] != '/') {
+    if ((other->name_length == 0) || (other->name[0] != '/')) {
         return; // Not a topic.
     }
 
@@ -542,31 +535,30 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             move_topic(mine, mine->lamport_clock + 1U);
         }
         schedule_gossip_asap(mine);
-        return;
-    }
-
-    // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
-    // non-viable because someone had to increment it, so there was a collision.
-    assert(mine->hash == other->hash);
-    if (mine->lamport_clock < other->value) {
-        // Ours is older than the one in the message, meaning that we have to catch up.
-        // But it could be that the subject-ID allocated by the other node does not suit us because we have a local
-        // topic there already. In that case, we will simply keep bumping it until a free slot is found.
-        // Since that free slot will be higher than what we just received, we become the winner in this transaction,
-        // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
-        CY_TRACE(cy,
-                 "Topic '%s' hash %016llx Lamport rewind %llu -> %llu to restore consensus",
-                 mine->name,
-                 (unsigned long long)mine->hash,
-                 (unsigned long long)mine->lamport_clock,
-                 (unsigned long long)other->value);
-        move_topic(mine, other->value);
-    }
-    // This is not else if!
-    if (mine->lamport_clock > other->value) {
-        // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
-        // so the other has to move. We simply reschedule the topic for gossip ASAP, no need to change anything.
-        schedule_gossip_asap(mine);
+    } else { // We have this topic! Check if we have consensus on the subject-ID.
+        // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
+        // non-viable because someone had to increment it, so there was a collision.
+        assert(mine->hash == other->hash);
+        if (mine->lamport_clock < other->value) {
+            // Ours is older than the one in the message, meaning that we have to catch up.
+            // But it could be that the subject-ID allocated by the other node does not suit us because we have a local
+            // topic there already. In that case, we will simply keep bumping it until a free slot is found.
+            // Since that free slot will be higher than what we just received, we become the winner in this transaction,
+            // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
+            CY_TRACE(cy,
+                     "Topic '%s' hash %016llx Lamport rewind %llu -> %llu to restore consensus",
+                     mine->name,
+                     (unsigned long long)mine->hash,
+                     (unsigned long long)mine->lamport_clock,
+                     (unsigned long long)other->value);
+            move_topic(mine, other->value);
+        }
+        // This is not else if!
+        if (mine->lamport_clock > other->value) {
+            // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
+            // so the other has to move. We simply reschedule the topic for gossip ASAP, no need to change anything.
+            schedule_gossip_asap(mine);
+        }
     }
 }
 
