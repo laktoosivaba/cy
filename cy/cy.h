@@ -16,11 +16,11 @@ extern "C"
 #endif
 
 /// A sensible middle ground between worst-case gossip traffic and memory utilization vs. longest name support.
-/// In CAN FD networks, topic names should not be longer than 22 bytes to avoid multi-frame heartbeats.
+/// In CAN FD networks, topic names should not be longer than 14 bytes to avoid multi-frame heartbeats.
 ///
 /// The name length is chosen such that together with the 1-byte length prefix the result is a multiple of 8 bytes,
 /// because it helps with memory-aliased C structures for quick serialization.
-#define CY_TOPIC_NAME_MAX 103
+#define CY_TOPIC_NAME_MAX 95
 
 /// The max namespace length should also provide space for at least one separator and the one-character topic name.
 #define CY_NAMESPACE_NAME_MAX (CY_TOPIC_NAME_MAX - 2)
@@ -164,10 +164,7 @@ struct cy_topic_t
     /// >>> d = Decimal(2**64)
     /// >>> 1 - ((d-1)/d) ** ((n*(n-1))//2)
     /// About 2.7e-14, or one in 37 trillion.
-    ///
     /// For pinned topics, the name hash equals the subject-ID.
-    /// This ensures that the preferred subject-ID is still found using (hash % CY_ALLOC_SUBJECT_COUNT);
-    /// also, it ensures that the discriminator (hash >> CY_SUBJECT_BITS) is zero, thus disabling its check.
     uint64_t hash;
     uint64_t lamport_clock;
     uint64_t owner_uid; ///< Zero is not a valid UID.
@@ -340,6 +337,13 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic);
 /// Note that the node-ID collision checks must be done on raw transport frames, not on reassembled transfers, for
 /// two reasons: 1. this is faster, allowing quick reaction; 2. in the presence of a node-ID conflict, transfers
 /// arriving from that ID cannot be robustly reassembled.
+///
+/// TODO FIXME MOVE THIS TO THE TRANSPORT LIBRARY INSTEAD! REASONS WHY:
+/// 1. This check operates at the frame level, not transfer level, which is too low for Cy; this is why we need this
+/// function as opposed to just handling things in cy_ingest.
+/// 2. The node-ID space and the optimal allocation strategy (Bloom filter size) are dependent on the transport layer!
+/// 3. HETEROGENEOUS REDUNDANT INTERFACES MAY HAVE TO USE DIFFERENT NODE-IDS, and attempting to allocate a shared one
+/// is at least inefficient, at most impossible!
 void cy_notify_node_id_collision(struct cy_t* const cy);
 
 /// If a node-ID is given explicitly at startup, it will be used as-is and the node will become operational immediately.
@@ -364,6 +368,7 @@ void cy_topic_destroy(struct cy_topic_t* const topic);
 
 /// Complexity is logarithmic in the number of topics. NULL if not found.
 struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name);
+struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash);
 struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id);
 
 /// Iterate over all topics in arbitrary order.

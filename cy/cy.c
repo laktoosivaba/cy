@@ -225,6 +225,9 @@ static void bloom64_purge(struct cy_bloom64_t* const bloom)
 /// chosen, and the corresponding entry in the filter will be set. If the filter is full, a random node-ID will be
 /// chosen, which can only happen if more than filter capacity nodes are currently online.
 /// The complexity is constant, independent of the filter occupancy.
+///
+/// In the future we could replace this with a deterministic algorithm that chooses the node-ID based on the UID
+/// and a nonce. Perhaps it could be simply SplitMix64 seeded with the UID?
 static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t node_id_max)
 {
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
@@ -313,10 +316,11 @@ struct topic_gossip_t
     uint16_t value;
     uint16_t _padding_a;
     uint32_t _padding_b;
+    uint64_t hash;
     uint8_t  name_length;
     char     name[CY_TOPIC_NAME_MAX];
 };
-static_assert(sizeof(struct topic_gossip_t) == 8 + 4 + 4 + 2 + 6 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
+static_assert(sizeof(struct topic_gossip_t) == 8 + 4 + 4 + 2 + 6 + 8 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
@@ -334,20 +338,19 @@ static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
                                          const uint64_t    lamport_clock,
                                          const uint64_t    owner_uid,
                                          const uint16_t    value,
+                                         const uint64_t    hash,
                                          const size_t      name_len,
                                          const char* const name)
 {
     assert(name_len <= CY_TOPIC_NAME_MAX);
     struct heartbeat_t obj = {
-        .uptime = (uint32_t)(uptime_us / 1000000U),
-        .uid = uid,
-        .topic_gossip =
-            {
-                .lamport_clock = lamport_clock,
-                .owner_uid     = owner_uid,
-                .value         = value,
-                .name_length   = (uint8_t)name_len,
-            },
+        .uptime       = (uint32_t)(uptime_us / 1000000U),
+        .uid          = uid,
+        .topic_gossip = { .lamport_clock = lamport_clock,
+                          .owner_uid     = owner_uid,
+                          .value         = value,
+                          .hash          = hash,
+                          .name_length   = (uint8_t)name_len },
     };
     memcpy(obj.topic_gossip.name, name, name_len);
     return obj;
@@ -382,6 +385,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
                                                   topic->lamport_clock,
                                                   topic->owner_uid,
                                                   topic->subject_id,
+                                                  topic->hash,
                                                   topic->name_length,
                                                   topic->name);
     const size_t             msz = get_heartbeat_size(&msg);
@@ -415,10 +419,13 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     (void)transfer;
 
     // Deserialize the message.
+    // We don't need the full name, only the first character for resource kind check, so we don't deserialize full name.
     // TODO: this is not a proper deserialization, we need to do it properly.
     struct heartbeat_t heartbeat = { 0 };
-    memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat)));
+    memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat) - CY_TOPIC_NAME_MAX + 1));
     const struct topic_gossip_t* const gos = &heartbeat.topic_gossip;
+
+    // Even though we don't deserialize the full name, we do deserialize the name length field.
     if ((gos->name_length == 0) || (gos->name_length > CY_TOPIC_NAME_MAX)) {
         return; // Malformed message.
     }
@@ -430,7 +437,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
 
     // Find the topic in our local database.
     struct cy_t* const cy    = sub->topic->cy;
-    struct cy_topic_t* topic = cy_topic_find_by_name(cy, gos->name);
+    struct cy_topic_t* topic = cy_topic_find_by_hash(cy, gos->hash);
     if (topic == NULL) { // We don't know this topic, but we still need to check for a subject-ID collision.
         topic = cy_topic_find_by_subject_id(cy, gos->value);
         if (topic == NULL) {
@@ -736,9 +743,12 @@ void cy_topic_destroy(struct cy_topic_t* const topic)
 
 struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name)
 {
+    return cy_topic_find_by_hash(cy, topic_hash(name, NULL));
+}
+
+struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash)
+{
     assert(cy != NULL);
-    assert(name != NULL);
-    uint64_t                 hash = topic_hash(name, NULL);
     struct cy_topic_t* const topic =
       (struct cy_topic_t*)cavlSearch(&cy->topics_by_hash, &hash, &cavl_predicate_topic_hash_raw, NULL);
     if (topic == NULL) {
