@@ -147,10 +147,9 @@ void tracing_subscription_callback(struct cy_subscription_t* subscription,
         sprintf(hex + i * 2, "%02x", ((const uint8_t*)payload.data)[i]);
     }
     hex[sizeof(hex) - 1] = '\0';
-
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "\u2709 [sid=%04x nid=%04x tid=%08llx sz=%06zu ts=%09llu] @ %s: %s",
+             "💬 [sid=%04x nid=%04x tid=%08llx sz=%06zu ts=%09llu] @ %s: %s",
              subscription->topic->subject_id,
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
@@ -211,6 +210,9 @@ int main(const int argc, char* argv[])
             break;
         }
 
+        // Publish messages.
+        // I'm thinking that it would be nice to have olga_scheduler ported into C11...
+        // See https://github.com/Zubax/olga_scheduler
         const uint64_t now = cy_udp_now_us();
         if (now >= next_publish_at) {
             if (cy_has_node_id(&cy_udp.base)) {

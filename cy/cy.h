@@ -43,8 +43,10 @@ extern "C"
 ///
 /// If a conflict is found, the current node-ID is abandoned regardless of whether it's been given explicitly or
 /// allocated automatically.
-#define CY_START_DELAY_MIN_us 1000000UL
-#define CY_START_DELAY_MAX_us 5000000UL
+///
+/// TODO this goes to the transport layer; see below why.
+#define CY_START_DELAY_MIN_us (CY_HEARTBEAT_PERIOD_DEFAULT_us * 5)
+#define CY_START_DELAY_MAX_us (CY_START_DELAY_MIN_us * 5)
 
 /// The range of unregulated identifiers to use for CRDT topic allocation.
 /// The range should be the same for all applications, so that they can all make deterministic and identical
