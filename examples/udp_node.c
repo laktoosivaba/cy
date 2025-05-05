@@ -149,7 +149,7 @@ void tracing_subscription_callback(struct cy_subscription_t* subscription,
     hex[sizeof(hex) - 1] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%08llx sz=%06zu ts=%09llu] @ %s: %s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s: %s",
              subscription->topic->subject_id,
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
@@ -221,7 +221,7 @@ int main(const int argc, char* argv[])
                         continue;
                     }
                     char msg[256];
-                    sprintf(msg, "Hello from %08llx.", (unsigned long long)cy_udp.base.uid);
+                    sprintf(msg, "Hello from %016llx.", (unsigned long long)cy_udp.base.uid);
                     const struct cy_payload_t payload = { .data = msg, .size = strlen(msg) };
                     const cy_err_t            pub_res = cy_udp_publish(&topics[i], now + 100000, payload);
                     if (pub_res < 0) {
@@ -265,7 +265,7 @@ void cy_trace(struct cy_t* const  cy,
     }
     static const uint64_t mega = 1000000U;
     fprintf(stderr,
-            "CY(%08llx %04x %05llu.%06llu \"%s\") %s.%03llu %s:%03u: %s: ",
+            "CY(%016llx %04x %05llu.%06llu \"%s\") %s.%03llu %s:%03u: %s: ",
             (unsigned long long)cy->uid,
             (unsigned)cy->node_id,
             (unsigned long long)(uptime_us / mega),

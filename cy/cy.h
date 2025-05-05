@@ -16,9 +16,9 @@ extern "C"
 #endif
 
 /// A sensible middle ground between worst-case gossip traffic and memory utilization vs. longest name support.
-/// In CAN FD networks, topic names should not be longer than 14 bytes to avoid multi-frame heartbeats.
+/// In CAN FD networks, topic names should be short to avoid multi-frame heartbeats.
 ///
-/// The name length is chosen such that together with the 1-byte length prefix the result is a multiple of 8 bytes,
+/// Max name length is chosen such that together with the 1-byte length prefix the result is a multiple of 8 bytes,
 /// because it helps with memory-aliased C structures for quick serialization.
 #define CY_TOPIC_NAME_MAX 95
 
@@ -137,15 +137,32 @@ typedef cy_err_t (*cy_transport_subscribe_t)(struct cy_topic_t*);
 /// Instructs the underlying transport to destroy an existing subscription.
 typedef void (*cy_transport_unsubscribe_t)(struct cy_topic_t*);
 
+/// If a subject-ID collision or divergence are discovered, Cy may reassign the topic to a different subject-ID.
+/// To do that, it will first unsubscribe the topic using the corresponding function,
+/// and then invoke the subscription function to recreate the subscription with the new subject-ID.
+///
+/// The unsubscription function is infallible, but the subscription function may fail.
+/// If it does, this callback will be invoked to inform the user about the failure,
+/// along with the error code returned by the subscription function. It is up to the user to repair the problem.
+/// If the user does nothing, the topic will be simply left in the unsubscribed state, as if
+/// cy_topic_subscribe() was never invoked. However, if the topic needs to be moved again in the future,
+/// Cy will use that opportunity to attempt another subscription, which may or may not succeed.
+///
+/// A possible failure handling strategy is to record which topic has failed and to keep trying to re-subscribe
+/// in the background until it succeeds. Once the subscription is successful, no additional actions are needed.
+/// It is probably not useful to try and invoke cy_subscribe() immediately from the error handler.
+typedef void (*cy_transport_handle_resubscription_err_t)(struct cy_topic_t*, const cy_err_t);
+
 /// Transport layer interface functions.
 /// These can be underpinned by libcanard, libudpard, libserard, or any other transport library.
 struct cy_transport_io_t
 {
-    cy_transport_set_node_id_t   set_node_id;
-    cy_transport_clear_node_id_t clear_node_id;
-    cy_transport_publish_t       publish;
-    cy_transport_subscribe_t     subscribe;
-    cy_transport_unsubscribe_t   unsubscribe;
+    cy_transport_set_node_id_t               set_node_id;
+    cy_transport_clear_node_id_t             clear_node_id;
+    cy_transport_publish_t                   publish;
+    cy_transport_subscribe_t                 subscribe;
+    cy_transport_unsubscribe_t               unsubscribe;
+    cy_transport_handle_resubscription_err_t handle_resubscription_err;
 };
 
 struct cy_topic_t
@@ -168,9 +185,7 @@ struct cy_topic_t
     /// About 2.7e-14, or one in 37 trillion.
     /// For pinned topics, the name hash equals the subject-ID.
     uint64_t hash;
-    uint64_t lamport_clock;
-    uint64_t owner_uid; ///< Zero is not a valid UID.
-    uint16_t subject_id;
+    uint16_t subject_id; // TODO: ONLY LAMPORT CLOCK IS NEEDED!
 
     /// Updated whenever the topic is gossiped.
     ///
@@ -194,7 +209,7 @@ struct cy_topic_t
     struct cy_subscription_t* sub_list;
     uint64_t                  sub_transfer_id_timeout_us;
     size_t                    sub_extent;
-    bool                      sub_active;
+    bool                      subscribed; ///< May be false even if sub_list is nonempty on resubscription error.
 };
 
 /// Cy will free the payload buffer afterward. The application cannot keep it beyond the callback because the memory
@@ -410,10 +425,11 @@ static inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const
 /// Technically, the callback can be NULL, and the subscriber will work anyway.
 /// One can still use the transfers from the underlying transport library before they are passed to cy_ingest().
 ///
-/// Future expansion: add wildcard subscribers that match topic names by pattern. Requires unbounded dynamic memory.
+/// Invoking this function on the same cy_subscription_t instance multiple times is allowed and will have no effect
+/// if the subscription is already active. This use case is added specifically to allow repairing broken
+/// resubscriptions when Cy attempts to move the topic to another subject-ID but fails to subscribe it.
 ///
-/// Creation of a new subscription will involve network transactions unless the subject-ID is already known or is
-/// fixed. However, the operation is non-blocking --- the message will be enqueued and sent in the background.
+/// Future expansion: add wildcard subscribers that match topic names by pattern. Requires unbounded dynamic memory.
 ///
 /// It is allowed to remove the subscription from its own callback, but not from the callback of another
 /// subscription.
