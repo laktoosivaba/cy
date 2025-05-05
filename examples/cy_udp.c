@@ -180,6 +180,13 @@ static void transport_unsubscribe(struct cy_topic_t* const cy_topic)
     }
 }
 
+static void transport_handle_resubscription_error(struct cy_topic_t* const cy_topic, const cy_err_t error)
+{
+    CY_TRACE(cy_topic->cy, "Resubscription error on topic '%s': %d", cy_topic->name, error);
+    // Currently, we don't do anything here. What we could do is to put all failed topics into some list,
+    // and attempt to resubscribe to them every now and then from the spin functions.
+}
+
 cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const uint64_t         uid,
                     const char* const      namespace_,
@@ -233,11 +240,12 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                      namespace_,
                      &cy_udp->heartbeat_topic.base,
                      &now_us,
-                     (struct cy_transport_io_t){ .set_node_id   = transport_set_node_id,
-                                                 .clear_node_id = transport_clear_node_id,
-                                                 .publish       = transport_publish,
-                                                 .subscribe     = transport_subscribe,
-                                                 .unsubscribe   = transport_unsubscribe });
+                     (struct cy_transport_io_t){ .set_node_id               = transport_set_node_id,
+                                                 .clear_node_id             = transport_clear_node_id,
+                                                 .publish                   = transport_publish,
+                                                 .subscribe                 = transport_subscribe,
+                                                 .unsubscribe               = transport_unsubscribe,
+                                                 .handle_resubscription_err = transport_handle_resubscription_error });
     }
 
     // Cleanup on error.
