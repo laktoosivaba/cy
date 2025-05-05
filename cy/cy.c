@@ -23,7 +23,7 @@ static size_t smaller(const size_t a, const size_t b)
 
 #if CY_CONFIG_TRACE
 
-size_t popcount_all(const size_t nbits, const void* x)
+static size_t popcount_all(const size_t nbits, const void* x)
 {
     size_t               out = 0;
     const uint8_t* const p   = (const uint8_t*)x;
@@ -36,6 +36,7 @@ size_t popcount_all(const size_t nbits, const void* x)
 #endif
 
 // ----------------------------------------  CRC-64/WE  ----------------------------------------
+// TODO FIXME REPLACE CRC64 WITH A BETTER 64-bit HASH FUNCTION
 
 #define CRC64WE_INITIAL UINT64_MAX
 
@@ -201,25 +202,25 @@ static uint64_t random_uint(const uint64_t min, const uint64_t max)
 
 /// A Bloom filter is a set-only structure so there is no way to clear a bit after it has been set.
 /// It is only possible to purge the entire filter state.
-static void bloom64_set(const size_t bloom_capacity, uint64_t* const bloom, const size_t value)
+static void bloom64_set(struct cy_bloom64_t* const bloom, const size_t value)
 {
     assert(bloom != NULL);
-    const size_t index = value % bloom_capacity;
-    bloom[index / 64U] |= (1ULL << (index % 64U));
+    const size_t index = value % bloom->n_bits;
+    bloom->storage[index / 64U] |= (1ULL << (index % 64U));
 }
 
-static bool bloom64_get(const size_t bloom_capacity, const uint64_t* const bloom, const size_t value)
+static bool bloom64_get(const struct cy_bloom64_t* const bloom, const size_t value)
 {
     assert(bloom != NULL);
-    const size_t index = value % bloom_capacity;
-    return (bloom[index / 64U] & (1ULL << (index % 64U))) != 0;
+    const size_t index = value % bloom->n_bits;
+    return (bloom->storage[index / 64U] & (1ULL << (index % 64U))) != 0;
 }
 
-static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
+static void bloom64_purge(struct cy_bloom64_t* const bloom)
 {
     assert(bloom != NULL);
-    for (size_t i = 0; i < (bloom_capacity + 63U) / 64U; i++) { // dear compiler please unroll this
-        bloom[i] = 0U; // I suppose this is better than memset cuz we're aligned to 64 bits.
+    for (size_t i = 0; i < (bloom->n_bits + 63U) / 64U; i++) { // dear compiler please unroll this
+        bloom->storage[i] = 0U; // I suppose this is better than memset cuz we're aligned to 64 bits.
     }
 }
 
@@ -227,19 +228,19 @@ static void bloom64_purge(const size_t bloom_capacity, uint64_t* const bloom)
 /// chosen, and the corresponding entry in the filter will be set. If the filter is full, a random node-ID will be
 /// chosen, which can only happen if more than filter capacity nodes are currently online.
 /// The complexity is constant, independent of the filter occupancy.
-static uint16_t pick_node_id(const size_t bloom_capacity, const uint64_t* const bloom, const uint16_t node_id_max)
+static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t node_id_max)
 {
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
     // This somewhat undermines the randomness of the result, but it is always fast.
-    const size_t num_words  = (smaller(node_id_max, bloom_capacity) + 63U) / 64U;
+    const size_t num_words  = (smaller(node_id_max, bloom->n_bits) + 63U) / 64U;
     size_t       word_index = (size_t)random_uint(0U, num_words - 1U);
     for (size_t i = 0; i < num_words; i++) {
-        if (bloom[word_index] != UINT64_MAX) {
+        if (bloom->storage[word_index] != UINT64_MAX) {
             break;
         }
         word_index = (word_index + 1U) % num_words;
     }
-    const uint64_t word = bloom[word_index];
+    const uint64_t word = bloom->storage[word_index];
     if (word == UINT64_MAX) {
         return (uint16_t)random_uint(0U, node_id_max); // The filter is full, fallback to random node-ID.
     }
@@ -255,11 +256,11 @@ static uint16_t pick_node_id(const size_t bloom_capacity, const uint64_t* const 
     // This means that we can increase randomness by incrementing the node-ID by a multiple of the Bloom filter period.
     size_t node_id = (word_index * 64U) + bit_index;
     assert(node_id < node_id_max);
-    assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
-    node_id += (size_t)random_uint(0, node_id_max / bloom_capacity) * bloom_capacity;
+    assert(bloom64_get(bloom, node_id) == false);
+    node_id += (size_t)random_uint(0, node_id_max / bloom->n_bits) * bloom->n_bits;
     assert(node_id < node_id_max);
-    assert(bloom64_get(bloom_capacity, bloom, node_id) == false);
-    bloom64_set(bloom_capacity, (uint64_t*)bloom, node_id);
+    assert(bloom64_get(bloom, node_id) == false);
+    bloom64_set(bloom, node_id);
     return (uint16_t)node_id;
 }
 
@@ -460,6 +461,8 @@ cy_err_t cy_new(struct cy_t* const             cy,
                 const uint64_t                 uid,
                 const uint16_t                 node_id,
                 const uint16_t                 node_id_max,
+                const size_t                   node_id_occupancy_bloom_filter_64bit_word_count,
+                uint64_t* const                node_id_occupancy_bloom_filter_storage,
                 const char* const              namespace_,
                 struct cy_topic_t* const       heartbeat_topic,
                 const cy_now_t                 now,
@@ -467,6 +470,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
 {
     assert(cy != NULL);
     assert(uid != 0);
+    assert((node_id_occupancy_bloom_filter_storage != NULL) && (node_id_occupancy_bloom_filter_64bit_word_count > 0));
 
     // This is fine even if multiple nodes run locally!
     g_splitmix64_state ^= uid;
@@ -498,7 +502,9 @@ cy_err_t cy_new(struct cy_t* const             cy,
     // Postpone calling the functions until after the object is set up.
     cy->started_at_us = cy->now(cy);
 
-    bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
+    cy->node_id_bloom.n_bits  = node_id_occupancy_bloom_filter_64bit_word_count * 64U;
+    cy->node_id_bloom.storage = node_id_occupancy_bloom_filter_storage;
+    bloom64_purge(&cy->node_id_bloom);
 
     // If a node-ID is given explicitly, we want to publish our heartbeat ASAP to speed up network convergence
     // and to claim the address. If we are not given a node-ID, we need to first listen to the network.
@@ -508,7 +514,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
     if (cy->node_id > cy->node_id_max) {
         cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
     } else {
-        bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id);
+        bloom64_set(&cy->node_id_bloom, cy->node_id);
         res = cy->transport.set_node_id(cy);
     }
 
@@ -539,8 +545,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
     // We snoop on all transfers to update the node-ID occupancy Bloom filter.
     // If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
     // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
-    if ((cy->node_id > cy->node_id_max) &&
-        !bloom64_get(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id)) {
+    if ((cy->node_id > cy->node_id_max) && !bloom64_get(&cy->node_id_bloom, metadata.remote_node_id)) {
         // The mean extra time is chosen to be simply one heartbeat period.
         cy->heartbeat_next_us += random_uint(0, 2 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
         CY_TRACE(cy,
@@ -548,9 +553,9 @@ void cy_ingest(struct cy_topic_t* const        topic,
                  metadata.remote_node_id,
                  topic->name,
                  topic->subject_id,
-                 popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom) + 1U);
+                 popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage) + 1U);
     }
-    bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, metadata.remote_node_id);
+    bloom64_set(&cy->node_id_bloom, metadata.remote_node_id);
 
     // Simply invoke all callbacks in the subscription list.
     struct cy_subscription_t* sub = topic->sub_list;
@@ -574,13 +579,13 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
     // If it is time to publish a heartbeat but we still don't have a node-ID, it means that it is time to allocate!
     cy_err_t res = 0;
     if (cy->node_id >= cy->node_id_max) {
-        cy->node_id = pick_node_id(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id_max);
+        cy->node_id = pick_node_id(&cy->node_id_bloom, cy->node_id_max);
         assert(cy->node_id <= cy->node_id_max);
         res = cy->transport.set_node_id(cy);
         CY_TRACE(cy,
                  "Picked own node-ID %u; Bloom popcount %zu; set_node_id()->%d",
                  cy->node_id,
-                 popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom),
+                 popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage),
                  res);
     }
     assert(cy->node_id <= cy->node_id_max);
@@ -627,15 +632,15 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
     CY_TRACE(cy,
              "Node-ID collision on %u; Bloom purge with popcount %zu",
              cy->node_id,
-             popcount_all(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom));
+             popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage));
     // We must reset the Bloom filter because there may be tombstones in it.
     // It will be repopulated afresh during the delay we set below.
-    bloom64_purge(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom);
+    bloom64_purge(&cy->node_id_bloom);
     // We don't want to reuse the same node-ID to avoid the risk of picking up RPC transfers addressed to the
     // conflicting node, so we mark it used. The conflicting node may continue using that address if it hasn't heard
     // us yet, which is preferable as it minimizes disruptions. If the other node heard us, it will also be abandoning
     // this address, but we don't want it either because there may be in-flight RPC transfers addressed to it.
-    bloom64_set(CY_NODE_ID_BLOOM_CAPACITY, cy->node_id_bloom, cy->node_id);
+    bloom64_set(&cy->node_id_bloom, cy->node_id);
     // Restart the node-ID allocation process.
     cy->node_id = CY_NODE_ID_INVALID;
     cy->heartbeat_next_us += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);

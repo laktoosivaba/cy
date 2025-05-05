@@ -6,7 +6,8 @@
 #include <cy.h>
 #include <udpard.h>
 
-#define CY_UDP_IFACE_COUNT_MAX UDPARD_NETWORK_INTERFACE_COUNT_MAX
+#define CY_UDP_IFACE_COUNT_MAX           UDPARD_NETWORK_INTERFACE_COUNT_MAX
+#define CY_UDP_NODE_ID_BLOOM_64BIT_WORDS 128
 
 struct cy_udp_topic_t
 {
@@ -27,6 +28,7 @@ struct cy_udp_topic_t
 struct cy_udp_t
 {
     struct cy_t                    base;
+    uint64_t                       node_id_bloom_storage[CY_UDP_NODE_ID_BLOOM_64BIT_WORDS];
     struct cy_udp_topic_t          heartbeat_topic;
     struct UdpardMemoryResource    mem;
     struct UdpardRxMemoryResources rx_mem;

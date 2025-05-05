@@ -64,12 +64,6 @@ extern "C"
 #define CY_SUBJECT_ID_INVALID 0xFFFFU
 #define CY_NODE_ID_INVALID    0xFFFFU
 
-/// The size of the address occupancy Bloom filter effectively limits the maximum number of nodes that can be
-/// statelessly auto-allocated in the network. More nodes can be added only if manual address assignment is used.
-/// A filter composed of 64x64-bit words can support up to 4096 auto-allocated nodes per network.
-#define CY_NODE_ID_BLOOM_64BIT_WORDS 64U
-#define CY_NODE_ID_BLOOM_CAPACITY    (CY_NODE_ID_BLOOM_64BIT_WORDS * 64U)
-
 typedef int32_t cy_err_t;
 
 struct cy_t;
@@ -98,6 +92,13 @@ struct cy_tree_t
     struct cy_tree_t* up;
     struct cy_tree_t* lr[2];
     int8_t            bf;
+};
+
+/// An ordinary Bloom filter with 64-bit words.
+struct cy_bloom64_t
+{
+    size_t    n_bits; ///< The total number of bits in the filter, a multiple of 64.
+    uint64_t* storage;
 };
 
 struct cy_transfer_meta_t
@@ -224,7 +225,15 @@ struct cy_t
 
     uint16_t node_id;
     uint16_t node_id_max; ///< Depends on the transport layer.
-    uint64_t node_id_bloom[CY_NODE_ID_BLOOM_64BIT_WORDS];
+
+    /// The size of the address occupancy Bloom filter effectively limits the maximum number of nodes that can be
+    /// statelessly auto-allocated in the network. More nodes can be added only if manual address assignment is used.
+    /// Nodes on the network may have different Bloom filter sizes, as it does not affect their compatibility.
+    ///
+    /// A filter composed of 64x64-bit words can support up to 4096 auto-allocated nodes per network, which is a safe
+    /// choice for most Cyphal networks.
+    /// For Cyphal/CAN, a single 64-bit word is sufficient, since CAN networks with >64 nodes are exceedingly rare.
+    struct cy_bloom64_t node_id_bloom;
 
     /// The user can use this field for arbitrary purposes.
     void* user;
@@ -255,6 +264,12 @@ struct cy_t
 ///
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 ///
+/// The node-ID occupancy Bloom filter is used to track the occupancy of the node-ID space. The filter must be at least
+/// a single 64-bit word long. The number of bits in the filter (64 times the word count) defines the maximum number
+/// of nodes present in the network while the local node is still guaranteed to be able to auto-configure its own ID
+/// without collisions. The recommended parameters are two 64-bit words for CAN networks (takes 16 bytes) and
+/// 64~128 words (512~1024 bytes) for all other transports.
+///
 /// The heartbeat_topic must point to an uninitialized topic structure that will be used to publish heartbeat messages;
 /// this is the only topic that is needed by Cy itself. It will be initialized and managed automatically; if necessary,
 /// the user can add additional subscriptions to it later.
@@ -264,6 +279,8 @@ cy_err_t cy_new(struct cy_t* const             cy,
                 const uint64_t                 uid,
                 const uint16_t                 node_id,
                 const uint16_t                 node_id_max,
+                const size_t                   node_id_occupancy_bloom_filter_64bit_word_count,
+                uint64_t* const                node_id_occupancy_bloom_filter_storage,
                 const char* const              namespace_,
                 struct cy_topic_t* const       heartbeat_topic,
                 const cy_now_t                 now,
