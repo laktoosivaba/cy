@@ -184,6 +184,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const uint64_t         uid,
                     const char* const      namespace_,
                     const uint32_t         local_iface_address[CY_UDP_IFACE_COUNT_MAX],
+                    const uint16_t         local_node_id,
                     const size_t           tx_queue_capacity_per_iface)
 {
     assert(cy_udp != NULL);
@@ -225,7 +226,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     if (res >= 0) {
         res = cy_new(&cy_udp->base,
                      uid,
-                     CY_NODE_ID_INVALID,
+                     local_node_id,
                      UDPARD_NODE_ID_MAX,
                      CY_UDP_NODE_ID_BLOOM_64BIT_WORDS,
                      cy_udp->node_id_bloom_storage,

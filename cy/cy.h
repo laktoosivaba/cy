@@ -198,6 +198,8 @@ struct cy_topic_t
     bool                      sub_active;
 };
 
+/// Cy will free the payload buffer afterward. The application cannot keep it beyond the callback because the memory
+/// could be allocated from the NIC buffers etc.
 typedef void (*cy_subscription_callback_t)(struct cy_subscription_t* subscription,
                                            uint64_t                  timestamp_us,
                                            struct cy_transfer_meta_t metadata,
@@ -261,6 +263,11 @@ struct cy_t
 };
 
 /// If node_id > node_id_max, it is assumed to be unknown, so a stateless PnP node-ID allocation will be performed.
+/// If a node-ID is given explicitly, a heartbeat will be published immediately to claim it. If the ID
+/// is already taken by another node, it will have to move. This behavior differs from the normal node-ID
+/// autoconfiguration process, where a node will make sure to avoid conflicts at the beginning to avoid disturbing
+/// the network; the rationale is that a manually assigned node-ID takes precedence over the auto-assigned one,
+/// thus forcing any squatters out of the way.
 ///
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 ///
@@ -427,17 +434,18 @@ size_t cy_canonicalize_topic(const char* const in, char* const out);
 extern void cy_trace(struct cy_t* const  cy,
                      const char* const   file,
                      const uint_fast16_t line,
+                     const char* const   func,
                      const char* const   format,
                      ...)
 #if defined(__GNUC__) || defined(__clang__)
-  __attribute__((__format__(__printf__, 4, 5)))
+  __attribute__((__format__(__printf__, 5, 6)))
 #endif
   ;
 
 /// This convenience macro is defined in the header file to enable reuse in other modules.
 /// The newline at the end is not included in the format string.
 #if CY_CONFIG_TRACE
-#define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __VA_ARGS__)
+#define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __func__, __VA_ARGS__)
 #else
 #define CY_TRACE(cy, ...) (void)0
 #endif

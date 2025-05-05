@@ -6,9 +6,6 @@
 #include <assert.h>
 #include <string.h>
 
-#define BYTE_BITS 8U
-#define BYTE_MAX  0xFFU
-
 // #define HEARTBEAT_TOPIC_NAME     "/7509"
 #define HEARTBEAT_TOPIC_NAME     "/8191" // TODO FIXME XXX THIS IS ONLY FOR TESTING; the correct name is "/7509"
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
@@ -507,7 +504,9 @@ cy_err_t cy_new(struct cy_t* const             cy,
     bloom64_purge(&cy->node_id_bloom);
 
     // If a node-ID is given explicitly, we want to publish our heartbeat ASAP to speed up network convergence
-    // and to claim the address. If we are not given a node-ID, we need to first listen to the network.
+    // and to claim the address; if it's already taken, we will want to cause a collision to move the other node,
+    // because manually assigned addresses take precedence over auto-assigned ones.
+    // If we are not given a node-ID, we need to first listen to the network.
     cy->heartbeat_period_us = CY_HEARTBEAT_PERIOD_DEFAULT_us;
     cy->heartbeat_next_us   = cy->started_at_us;
     cy_err_t res            = 0;
@@ -531,6 +530,8 @@ cy_err_t cy_new(struct cy_t* const             cy,
             cy_topic_destroy(cy->heartbeat_topic);
         }
     }
+
+    CY_TRACE(cy, "cy_new(%p)->%d", (void*)cy, res);
     return res;
 }
 

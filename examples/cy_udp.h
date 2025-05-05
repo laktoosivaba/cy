@@ -61,10 +61,13 @@ uint64_t cy_udp_now_us(void);
 ///
 /// Unused interfaces should have address either 0 or 0xFFFFFFFF;
 /// to parse IP addresses from string see udp_parse_iface_address().
+///
+/// The local node ID should be set to CY_NODE_ID_INVALID unless manual configuration is required.
 cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
                     const uint64_t         uid,
                     const char* const      namespace_,
                     const uint32_t         local_iface_address[CY_UDP_IFACE_COUNT_MAX],
+                    const uint16_t         local_node_id,
                     const size_t           tx_queue_capacity_per_iface);
 
 /// Wait for events (blocking), process them, and return. Invoke this in a tight superloop to keep the system alive.
