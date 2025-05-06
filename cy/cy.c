@@ -18,6 +18,11 @@ static size_t smaller(const size_t a, const size_t b)
     return (a < b) ? a : b;
 }
 
+static uint64_t max_u64(const uint64_t a, const uint64_t b)
+{
+    return (a > b) ? a : b;
+}
+
 #if CY_CONFIG_TRACE
 
 static size_t popcount_all(const size_t nbits, const void* x)
@@ -275,6 +280,19 @@ static bool is_pinned(const uint64_t hash)
     return hash < CY_TOTAL_SUBJECT_COUNT;
 }
 
+/// Pinned topics always win regardless. Pinned topic names are canonical, which ensures that one pinned topic
+/// cannot collide with another pinned topic.
+static bool left_wins(const struct cy_topic_t* const left, const uint64_t right_respect, const uint64_t right_hash)
+{
+    if (is_pinned(left->hash) != is_pinned(right_hash)) {
+        return is_pinned(left->hash);
+    }
+    if (left->respect == right_respect) {
+        return left->hash < right_hash; // tie breaker
+    }
+    return left->respect > right_respect;
+}
+
 /// log(N) index update requires removal and reinsertion.
 static void update_last_gossip_time(struct cy_topic_t* const topic, const uint64_t ts_us)
 {
@@ -359,6 +377,8 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats
 /// The new defeat counter cannot be zero if we're reallocating the topic. The only case when it's zero is when the
 /// topic is locally created for the first time. In this case, there is no need to remove it from the subject index.
 ///
+/// When a topic is moved, its respect is reset to zero.
+///
 /// This function will schedule all affected topics for gossip, including the one that is being moved.
 /// Sometimes this is undesirable; in that case the caller can restore the next gossip time after the call.
 ///
@@ -375,7 +395,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
-             "%*sAllocating '%s' hash %016llx subject %04x defeats %llu->%llu subscribed %d...",
+             "%*sAllocating '%s' hash %016llx subject %04x defeats %llu->%llu respect %llu subscribed %d...",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
@@ -383,6 +403,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->defeats,
              (unsigned long long)new_defeats,
+             (unsigned long long)topic->respect,
              (int)topic->subscribed);
 
     // We need to make sure no underlying resources are sitting on this topic before we move it.
@@ -396,6 +417,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     if (new_defeats > 0) { // If zero, the topic is not yet in the tree because it's new.
         cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
+    topic->respect = 0;
 
     // Whenever we alter a topic, we need to make sure that everyone knows about it.
     // Recursively we can alter a lot of topics like this.
@@ -462,11 +484,13 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
 struct topic_gossip_t
 {
     uint64_t value;
+    uint64_t rank;
+    uint64_t _padding_a;
     uint64_t hash;
     uint8_t  name_length;
     char     name[CY_TOPIC_NAME_MAX];
 };
-static_assert(sizeof(struct topic_gossip_t) == 8 + 4 + 2 + 2 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
+static_assert(sizeof(struct topic_gossip_t) == 8 + 8 + 8 + 8 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
@@ -477,11 +501,12 @@ struct heartbeat_t
     uint64_t              uid;
     struct topic_gossip_t topic_gossip;
 };
-static_assert(sizeof(struct heartbeat_t) == 128, "bad layout");
+static_assert(sizeof(struct heartbeat_t) == 144, "bad layout");
 
 static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
                                          const uint64_t    uid,
                                          const uint64_t    value,
+                                         const uint64_t    rank,
                                          const uint64_t    hash,
                                          const size_t      name_len,
                                          const char* const name)
@@ -490,17 +515,10 @@ static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
     struct heartbeat_t obj = {
         .uptime       = (uint32_t)(uptime_us / 1000000U),
         .uid          = uid,
-        .topic_gossip = { .hash = hash, .value = value, .name_length = (uint8_t)name_len },
+        .topic_gossip = { .hash = hash, .value = value, .rank = rank, .name_length = (uint8_t)name_len },
     };
     memcpy(obj.topic_gossip.name, name, name_len);
     return obj;
-}
-
-static size_t get_heartbeat_size(const struct heartbeat_t* const obj)
-{
-    assert(obj != NULL);
-    assert(obj->topic_gossip.name_length <= CY_TOPIC_NAME_MAX);
-    return sizeof(*obj) - (CY_TOPIC_NAME_MAX - obj->topic_gossip.name_length);
 }
 
 static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t now)
@@ -513,10 +531,11 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
     const struct heartbeat_t msg = make_heartbeat(now - cy->started_at_us, //
                                                   cy->uid,
                                                   topic->defeats,
+                                                  topic->respect,
                                                   topic->hash,
                                                   topic->name_length,
                                                   topic->name);
-    const size_t             msz = get_heartbeat_size(&msg);
+    const size_t             msz = sizeof(msg) - (CY_TOPIC_NAME_MAX - topic->name_length);
     assert(msz <= sizeof(msg));
     assert(msg.topic_gossip.name_length <= CY_TOPIC_NAME_MAX);
     const struct cy_payload_t payload = { .data = &msg, .size = msz }; // FIXME serialization
@@ -564,21 +583,24 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             return; // We are not using this subject-ID, no collision.
         }
         assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other->hash, other->value));
+        const bool win = left_wins(mine, other->rank, other->hash);
         CY_TRACE(cy,
                  "Collision on subject %04x discovered via gossip from %016llx %04x; we %s:\n"
-                 "\t local  topic hash=%016llx name='%s'\n"
-                 "\t remote topic hash=%016llx name='%s'",
+                 "\t local  topic hash %016llx defeats %llu respect %llu name '%s'\n"
+                 "\t remote topic hash %016llx defeats %llu respect %llu name '%s'",
                  cy_topic_get_subject_id(mine),
                  (unsigned long long)heartbeat.uid,
                  transfer.remote_node_id,
-                 ((mine->hash < other->hash) ? "WIN" : "LOSE"),
+                 (win ? "WIN" : "LOSE"),
                  (unsigned long long)mine->hash,
+                 (unsigned long long)mine->defeats,
+                 (unsigned long long)mine->respect,
                  mine->name,
                  (unsigned long long)other->hash,
+                 (unsigned long long)other->value,
+                 (unsigned long long)other->rank,
                  other->name);
-        // We have a subject-ID collision. Decide which one has to move. Currently, we apply a simple rule that can
-        // be applied consistently by each node independently: lower hash wins. This way, pinned topics remain pinned
-        // forever! If there is a conflict pinned vs. allocated, the pinned topic always wins!
+        // We have a subject-ID collision. Decide which one has to move.
         //
         // We don't need to do anything if we won, but we need to announce to the network (in particular to the
         // infringing node) that we are using this subject-ID, so that the loser knows that it has to move.
@@ -586,11 +608,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // If we lost, we need to gossip this topic ASAP as well because every other participant on this topic
         // will also move, but the trick is that the others could have settled on different subject-IDs.
         // Everyone needs to publish their own new allocation and then we will pick max subject-ID out of that.
-        if (mine->hash >= other->hash) {
-            // This will NEVER happen for pinned topics! Because:
-            // 1. their names are canonical, so a name clash is not possible.
-            // 2. their hash is just the pinned ID, which is guaranteed to be less than any real hash.
-            assert(!is_pinned(mine->hash) && !is_pinned(other->hash));
+        if (!win) {
             allocate_topic(mine, mine->defeats + 1U);
         } else {
             schedule_gossip_asap(mine);
@@ -606,7 +624,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             // Since that free slot will be higher than what we just received, we become the winner in this transaction,
             // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
             CY_TRACE(cy,
-                     "Topic '%s' hash %016llx collision fastforward %llu -> %llu to restore consensus",
+                     "Topic '%s' hash %016llx fastforward defeats %llu -> %llu to restore consensus",
                      mine->name,
                      (unsigned long long)mine->hash,
                      (unsigned long long)mine->defeats,
@@ -623,6 +641,14 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             schedule_gossip_asap(mine);
         } else {
             (void)0; // we are in sync, nothing to do
+        }
+
+        // Synchronize the respect only if we have a matching allocation.
+        // A mismatch here could occur if the other party has moved to a new subject-ID, but it is taken on our side,
+        // so we have to propose another one.
+        assert(mine->hash == other->hash);
+        if (mine->defeats == other->value) {
+            mine->respect = max_u64(mine->respect, other->rank) + 1U;
         }
     }
 }
@@ -834,6 +860,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
     topic->hash                    = topic_hash(name);
     topic->defeats                 = 0; // starting from the preferred subject-ID.
+    topic->respect                 = 0;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;

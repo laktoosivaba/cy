@@ -2,6 +2,8 @@
 
 uint64 value
 
+uint64 rank
+
 uint64 key_hash
 # The hash is computed as:
 #

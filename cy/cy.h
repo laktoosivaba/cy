@@ -191,8 +191,18 @@ struct cy_topic_t
     /// Higher Lamport clock (defeat counter) wins because it implies that any lower value is non-viable since
     /// it has been known to cause at least one collision anywhere on the network.
     /// The counter MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
+    /// When a topic is defeated, it loses its respect and has to re-earn it from zero.
     /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
     uint64_t defeats;
+
+    /// Ranks this topic by how widely it is used on the network AND by its age.
+    /// The initial value is zero and it grows with time, the rate of growth is determined by the number of users.
+    /// Topics with greater respect are less likely to be defeated, which is a critical property for ensuring
+    /// stability of the network. Given a conflict, more respected topic stays, while newcomers and rarely used
+    /// topics that are yet to earn respect have to adapt. When a topic is defeated, its respect is reset to zero.
+    /// A topic that nobody else is using will keep its respect at zero.
+    /// TODO CAVEAT: a single node publishing heartbeats more often will inflate the respect of its topics.
+    uint64_t respect;
 
     /// Updated whenever the topic is gossiped.
     ///
