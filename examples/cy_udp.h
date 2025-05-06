@@ -55,7 +55,7 @@ struct cy_udp_t
 };
 
 /// A convenience wrapper over clock_gettime(CLOCK_MONOTIC).
-uint64_t cy_udp_now_us(void);
+cy_us_t cy_udp_now_us(void);
 
 /// The namespace may be NULL or empty, in which case it defaults to "~".
 ///
@@ -79,7 +79,7 @@ cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp);
 /// If the deadline is in the future and there are currently no events to process, the function will block until the
 /// deadline is reached or until an event arrives. The function may return early even if no events are available.
 /// The current monotonic time is as defined in cy_udp_now().
-cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us);
+cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline_us);
 
 bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* const topic, const char* const name);
 
@@ -87,7 +87,7 @@ bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* cons
 static inline cy_err_t cy_udp_subscribe(struct cy_udp_topic_t* const     topic,
                                         struct cy_subscription_t* const  sub,
                                         const size_t                     extent,
-                                        const uint64_t                   transfer_id_timeout_us,
+                                        const cy_us_t                    transfer_id_timeout_us,
                                         const cy_subscription_callback_t callback)
 {
     return cy_subscribe(&topic->base, sub, extent, transfer_id_timeout_us, callback);
@@ -95,7 +95,7 @@ static inline cy_err_t cy_udp_subscribe(struct cy_udp_topic_t* const     topic,
 
 /// Trivial convenience wrapper over cy_publish().
 static inline cy_err_t cy_udp_publish(struct cy_udp_topic_t* const topic,
-                                      const uint64_t               tx_deadline_us,
+                                      const cy_us_t                tx_deadline_us,
                                       const struct cy_payload_t    payload)
 {
     return cy_publish(&topic->base, tx_deadline_us, payload);

@@ -243,7 +243,7 @@ void udp_rx_close(struct udp_rx_t* const self)
     }
 }
 
-int16_t udp_wait(const uint64_t          timeout_us,
+int16_t udp_wait(const int64_t           timeout_us,
                  const size_t            tx_count,
                  struct udp_tx_t** const tx,
                  const size_t            rx_count,
@@ -271,8 +271,8 @@ int16_t udp_wait(const uint64_t          timeout_us,
                 fds[idx].events = POLLIN;
             }
         }
-        const uint64_t timeout_ms = timeout_us / 1000U;
-        const int poll_result = poll(fds, (nfds_t)total_count, (int)((timeout_ms > INT_MAX) ? INT_MAX : timeout_ms));
+        const int64_t timeout_ms = timeout_us / 1000;
+        const int poll_result    = poll(fds, (nfds_t)total_count, (int)((timeout_ms > INT_MAX) ? INT_MAX : timeout_ms));
         if (poll_result >= 0) {
             res        = 0;
             size_t idx = 0;

@@ -26,11 +26,11 @@ extern "C"
 #define CY_NAMESPACE_NAME_MAX (CY_TOPIC_NAME_MAX - 2)
 
 /// If not sure, use this value for the transfer-ID timeout.
-#define CY_TRANSFER_ID_TIMEOUT_DEFAULT_us 2000000UL
+#define CY_TRANSFER_ID_TIMEOUT_DEFAULT_us 2000000L
 
 /// The rate at which the heartbeat topic is published is also the absolute minimum library state update interval.
 /// It is not an error to update it more often, and in fact it is desirable to reduce possible frequency aliasing.
-#define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000UL
+#define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000L
 
 /// If a node-ID is provided by the user, it will be used as-is and the node will become operational immediately.
 ///
@@ -67,6 +67,7 @@ extern "C"
 #define CY_NODE_ID_INVALID    0xFFFFU
 
 typedef int32_t cy_err_t;
+typedef int64_t cy_us_t; ///< Monotonic microsecond timestamp. Signed to permit arithmetics in the past.
 
 struct cy_t;
 struct cy_topic_t;
@@ -110,9 +111,8 @@ struct cy_transfer_meta_t
     uint64_t       transfer_id;
 };
 
-/// Returns the current monotonic time in microseconds. The initial time may be arbitrary (doesn't have to be zero).
-/// The returned value may be zero initially, but all subsequent calls must return strictly positive values.
-typedef uint64_t (*cy_now_t)(struct cy_t*);
+/// Returns the current monotonic time in microseconds. The initial time shall be non-negative.
+typedef cy_us_t (*cy_now_t)(struct cy_t*);
 
 /// Instructs the underlying transport to adopt the new node-ID.
 /// This is invoked either immediately from cy_new() if an explicit node-ID is given,
@@ -129,7 +129,7 @@ typedef void (*cy_transport_clear_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
 /// The function shall not increment the transfer-ID counter; Cy will do it.
-typedef cy_err_t (*cy_transport_publish_t)(struct cy_topic_t*, uint64_t, struct cy_payload_t);
+typedef cy_err_t (*cy_transport_publish_t)(struct cy_topic_t*, cy_us_t, struct cy_payload_t);
 
 /// Instructs the underlying transport layer to create a new subscription on the topic.
 typedef cy_err_t (*cy_transport_subscribe_t)(struct cy_topic_t*);
@@ -212,7 +212,7 @@ struct cy_topic_t
     /// This could occur in packet switched networks or if redundant interfaces are used. Such coordinated publishing
     /// can naturally settle on a stable state where some nodes become responsible for publishing specific topics,
     /// and nodes that happen to be in a different partition will never see those topics.
-    uint64_t last_gossip_us;
+    cy_us_t last_gossip_us;
 
     /// The user can use this field for arbitrary purposes.
     void* user;
@@ -224,7 +224,7 @@ struct cy_topic_t
 
     /// Only used if the application subscribes on this topic.
     struct cy_subscription_t* sub_list;
-    uint64_t                  sub_transfer_id_timeout_us;
+    cy_us_t                   sub_transfer_id_timeout_us;
     size_t                    sub_extent;
     bool                      subscribed; ///< May be false even if sub_list is nonempty on resubscription error.
 };
@@ -232,7 +232,7 @@ struct cy_topic_t
 /// Cy will free the payload buffer afterward. The application cannot keep it beyond the callback because the memory
 /// could be allocated from the NIC buffers etc.
 typedef void (*cy_subscription_callback_t)(struct cy_subscription_t* subscription,
-                                           uint64_t                  timestamp_us,
+                                           cy_us_t                   timestamp_us,
                                            struct cy_transfer_meta_t metadata,
                                            struct cy_payload_t       payload);
 struct cy_subscription_t
@@ -254,7 +254,7 @@ struct cy_t
     /// Zero is not a valid UID.
     uint64_t uid;
 
-    uint64_t started_at_us;
+    cy_us_t started_at_us;
 
     uint16_t node_id;
     uint16_t node_id_max; ///< Depends on the transport layer.
@@ -281,8 +281,8 @@ struct cy_t
     /// Heartbeat topic and related items.
     struct cy_topic_t*       heartbeat_topic;
     struct cy_subscription_t heartbeat_sub;
-    uint64_t                 heartbeat_next_us;
-    uint64_t                 heartbeat_period_us; ///< Can be adjusted by the user. Prefer larger period on CAN.
+    cy_us_t                  heartbeat_next_us;
+    cy_us_t                  heartbeat_period_us; ///< Can be adjusted by the user. Prefer larger period on CAN.
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;
@@ -332,7 +332,7 @@ void     cy_destroy(struct cy_t* const cy);
 /// If this is invoked together with cy_heartbeat(), then cy_ingest() must be invoked BEFORE cy_heartbeat()
 /// to ensure that the latest state updates are reflected in the next heartbeat message.
 void cy_ingest(struct cy_topic_t* const        topic,
-               const uint64_t                  timestamp_us,
+               const cy_us_t                   timestamp_us,
                const struct cy_transfer_meta_t metadata,
                const struct cy_payload_t       payload);
 
@@ -455,7 +455,7 @@ static inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
                       struct cy_subscription_t* const  sub,
                       const size_t                     extent,
-                      const uint64_t                   transfer_id_timeout_us,
+                      const cy_us_t                    transfer_id_timeout_us,
                       const cy_subscription_callback_t callback);
 void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t* const sub);
 
@@ -464,7 +464,7 @@ void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t
 /// This function always publishes only one transfer as requested; no auxiliary traffic is generated.
 /// If the local node-ID is not allocated, the function may fail depending on the capabilities of the transport library;
 /// to avoid this, it is possible to check cy_has_node_id() before calling this function.
-cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload);
+cy_err_t cy_publish(struct cy_topic_t* const topic, const cy_us_t tx_deadline_us, const struct cy_payload_t payload);
 
 /// Make topic name canonical. The output buffer shall be at least CY_TOPIC_NAME_MAX + 1 bytes long.
 /// Returns positive length on success, zero if the name is not valid.

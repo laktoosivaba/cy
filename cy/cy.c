@@ -8,10 +8,10 @@
 
 // #define HEARTBEAT_TOPIC_NAME     "/7509"
 #define HEARTBEAT_TOPIC_NAME     "/8191" // TODO FIXME XXX THIS IS ONLY FOR TESTING; the correct name is "/7509"
-#define HEARTBEAT_PUB_TIMEOUT_us 1000000UL
+#define HEARTBEAT_PUB_TIMEOUT_us 1000000L
 
 /// If a collision is found, do not gossip the topic if it was last seen less than this long ago.
-#define GOSSIP_RATE_LIMIT_us 100000UL
+#define GOSSIP_RATE_LIMIT_us 100000L
 
 static size_t smaller(const size_t a, const size_t b)
 {
@@ -294,7 +294,7 @@ static bool left_wins(const struct cy_topic_t* const left, const uint64_t right_
 }
 
 /// log(N) index update requires removal and reinsertion.
-static void update_last_gossip_time(struct cy_topic_t* const topic, const uint64_t ts_us)
+static void update_last_gossip_time(struct cy_topic_t* const topic, const cy_us_t ts_us)
 {
     assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
     cavlRemove(&topic->cy->topics_by_gossip_time, &topic->index_gossip_time);
@@ -314,7 +314,7 @@ static void schedule_gossip_asap(struct cy_topic_t* const topic)
         // (unless the user placed it in the dynamically allocated subject-ID range, which is not our problem);
         // we are publishing it just to announce that we have it; as such, the urgency of this action is a bit lower
         // than that of an actual colliding topic announcement, so we choose next-greater time to deprioritize it.
-        const uint64_t rank = is_pinned(topic->hash) ? 1 : 0;
+        const cy_us_t rank = is_pinned(topic->hash) ? 1 : 0;
         update_last_gossip_time(topic, rank);
     }
 }
@@ -503,7 +503,7 @@ struct heartbeat_t
 };
 static_assert(sizeof(struct heartbeat_t) == 144, "bad layout");
 
-static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
+static struct heartbeat_t make_heartbeat(const cy_us_t     uptime_us,
                                          const uint64_t    uid,
                                          const uint64_t    value,
                                          const uint64_t    rank,
@@ -521,7 +521,7 @@ static struct heartbeat_t make_heartbeat(const uint64_t    uptime_us,
     return obj;
 }
 
-static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t now)
+static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const cy_us_t now)
 {
     assert(topic != NULL);
     const struct cy_t* const cy = topic->cy;
@@ -552,7 +552,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 static void on_heartbeat(struct cy_subscription_t* const sub,
-                         const uint64_t                  ts_us,
+                         const cy_us_t                   ts_us,
                          const struct cy_transfer_meta_t transfer,
                          const struct cy_payload_t       payload)
 {
@@ -629,7 +629,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
                      (unsigned long long)mine->hash,
                      (unsigned long long)mine->defeats,
                      (unsigned long long)other->value);
-            const uint64_t old_last_gossip_us = mine->last_gossip_us;
+            const cy_us_t old_last_gossip_us = mine->last_gossip_us;
             allocate_topic(mine, other->value);
             if (mine->defeats == other->value) {
                 // We caught up exactly, we are in consensus, so there is no point gossipping this topic for now.
@@ -737,7 +737,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
 }
 
 void cy_ingest(struct cy_topic_t* const        topic,
-               const uint64_t                  timestamp_us,
+               const cy_us_t                   timestamp_us,
                const struct cy_transfer_meta_t metadata,
                const struct cy_payload_t       payload)
 {
@@ -773,7 +773,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
 
 cy_err_t cy_heartbeat(struct cy_t* const cy)
 {
-    const uint64_t now = cy->now(cy);
+    const cy_us_t now = cy->now(cy);
     if (now < cy->heartbeat_next_us) {
         return 0;
     }
@@ -894,12 +894,12 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
 
         cy->topic_count++;
         CY_TRACE(cy,
-                 "New topic '%s'@%u [%zu total], hash %016llx, last gossip %llu us",
+                 "New topic '%s'@%u [%zu total], hash %016llx, last gossip %lld us",
                  topic->name,
                  cy_topic_get_subject_id(topic),
                  cy->topic_count,
                  (unsigned long long)topic->hash,
-                 (unsigned long long)topic->last_gossip_us);
+                 (long long)topic->last_gossip_us);
     }
     return ok;
 }
@@ -970,7 +970,7 @@ uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic)
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
                       struct cy_subscription_t* const  sub,
                       const size_t                     extent,
-                      const uint64_t                   transfer_id_timeout_us,
+                      const cy_us_t                    transfer_id_timeout_us,
                       const cy_subscription_callback_t callback)
 {
     assert(topic != NULL);
@@ -1024,7 +1024,7 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
     return err;
 }
 
-cy_err_t cy_publish(struct cy_topic_t* const topic, const uint64_t tx_deadline_us, const struct cy_payload_t payload)
+cy_err_t cy_publish(struct cy_topic_t* const topic, const cy_us_t tx_deadline_us, const struct cy_payload_t payload)
 {
     assert(topic != NULL);
     assert((payload.data != NULL) || (payload.size == 0));

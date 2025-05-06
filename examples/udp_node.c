@@ -138,7 +138,7 @@ struct config_t load_config(const int argc, char* argv[])
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void tracing_subscription_callback(struct cy_subscription_t* const subscription,
-                                   const uint64_t                  timestamp_us,
+                                   const cy_us_t                   timestamp_us,
                                    const struct cy_transfer_meta_t metadata,
                                    const struct cy_payload_t       payload)
 {
@@ -203,7 +203,7 @@ int main(const int argc, char* argv[])
     }
 
     // Spin the event loop and publish on the topics.
-    uint64_t next_publish_at = cy_udp_now_us() + 1000000U;
+    cy_us_t next_publish_at = cy_udp_now_us() + 1000000;
     while (true) {
         const cy_err_t err_spin = cy_udp_spin_once(&cy_udp);
         if (err_spin < 0) {
@@ -214,7 +214,7 @@ int main(const int argc, char* argv[])
         // Publish messages.
         // I'm thinking that it would be nice to have olga_scheduler ported into C11...
         // See https://github.com/Zubax/olga_scheduler
-        const uint64_t now = cy_udp_now_us();
+        const cy_us_t now = cy_udp_now_us();
         if (now >= next_publish_at) {
             if (cy_has_node_id(&cy_udp.base)) {
                 for (size_t i = 0; i < cfg.topic_count; i++) {
@@ -246,7 +246,7 @@ void cy_trace(struct cy_t* const  cy,
               ...)
 {
     // Capture the uptime timestamp ASAP.
-    const uint64_t uptime_us = cy->now(cy) - cy->started_at_us;
+    const cy_us_t uptime_us = cy->now(cy) - cy->started_at_us;
 
     // Get the current wall time and format it.
     struct timespec ts;
@@ -264,16 +264,16 @@ void cy_trace(struct cy_t* const  cy,
     } else {
         file_name = file;
     }
-    static const uint64_t mega = 1000000U;
+    static const int32_t mega = 1000000;
     fprintf(stderr,
-            "CY(%016llx %04x %05llu.%06llu \"%s\") %s.%03llu %s:%03u: %s: ",
+            "CY(%016llx %04x %05lld.%06lld \"%s\") %s.%03lld %s:%03u: %s: ",
             (unsigned long long)cy->uid,
             (unsigned)cy->node_id,
-            (unsigned long long)(uptime_us / mega),
-            (unsigned long long)(uptime_us % mega),
+            (long long)(uptime_us / mega),
+            (long long)(uptime_us % mega),
             cy->namespace_,
             hhmmss,
-            (unsigned long long)ts.tv_nsec / mega,
+            (long long)ts.tv_nsec / mega,
             file_name,
             (unsigned)line,
             func);

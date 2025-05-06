@@ -13,7 +13,7 @@
 /// Maximum expected incoming datagram size. If larger jumbo frames are expected, this value should be increased.
 #define RX_BUFFER_SIZE 2000
 
-static uint64_t min_u64(const uint64_t a, const uint64_t b)
+static int64_t min_i64(const int64_t a, const int64_t b)
 {
     return (a < b) ? a : b;
 }
@@ -32,13 +32,13 @@ static void default_rx_sock_err_handler(struct cy_udp_topic_t* const topic,
     CY_TRACE(topic->base.cy, "RX socket error on iface #%u topic %s: %d", iface_index, topic->base.name, error);
 }
 
-uint64_t cy_udp_now_us(void)
+cy_us_t cy_udp_now_us(void)
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) { // NOLINT(*-include-cleaner)
         return 0;
     }
-    return (((uint64_t)ts.tv_sec) * 1000000U) + (((uint64_t)ts.tv_nsec) / 1000U);
+    return (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
 }
 
 static void* mem_alloc(void* const user, const size_t size)
@@ -78,7 +78,7 @@ static void purge_tx(struct cy_udp_t* const cy_udp, const uint_fast8_t iface_ind
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static uint64_t now_us(struct cy_t* const cy)
+static cy_us_t now_us(struct cy_t* const cy)
 {
     (void)cy;
     return cy_udp_now_us();
@@ -113,7 +113,7 @@ static void transport_clear_node_id(struct cy_t* const cy)
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 static cy_err_t transport_publish(struct cy_topic_t* const  topic,
-                                  const uint64_t            tx_deadline_us,
+                                  const cy_us_t             tx_deadline_us,
                                   const struct cy_payload_t payload)
 {
     struct cy_udp_t* const cy_udp = (struct cy_udp_t*)topic->cy;
@@ -121,7 +121,7 @@ static cy_err_t transport_publish(struct cy_topic_t* const  topic,
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         if (cy_udp->io[i].tx.queue_capacity > 0) {
             const int32_t e = udpardTxPublish(&cy_udp->io[i].tx,
-                                              tx_deadline_us,
+                                              (UdpardMicrosecond)tx_deadline_us,
                                               (enum UdpardPriority)topic->pub_priority,
                                               cy_topic_get_subject_id(topic),
                                               topic->pub_transfer_id,
@@ -266,11 +266,11 @@ static void tx_offload(struct cy_udp_t* const cy_udp)
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
         if (cy_udp->io[i].tx.queue_capacity > 0) {
             const struct UdpardTxItem* tqi    = udpardTxPeek(&cy_udp->io[i].tx);
-            const uint64_t             now_us = cy_udp_now_us(); // Do not call it for every frame, it's costly.
+            const cy_us_t              now_us = cy_udp_now_us(); // Do not call it for every frame, it's costly.
             while (tqi != NULL) {
                 // Attempt transmission only if the frame is not yet timed out while waiting in the TX queue.
                 // Otherwise, just drop it and move on to the next one.
-                if ((tqi->deadline_usec == 0) || (tqi->deadline_usec > now_us)) {
+                if ((tqi->deadline_usec == 0) || (tqi->deadline_usec > (UdpardMicrosecond)now_us)) {
                     const int16_t send_res = udp_tx_send(&cy_udp->io[i].tx_sock,
                                                          tqi->destination.ip_address,
                                                          tqi->destination.udp_port,
@@ -314,7 +314,7 @@ static void ingest_topic(struct cy_udp_topic_t* const topic, const struct Udpard
     }
 
     cy_ingest(&topic->base,
-              transfer->timestamp_usec,
+              (cy_us_t)transfer->timestamp_usec,
               (struct cy_transfer_meta_t){ .priority       = (enum cy_prio_t)transfer->priority,
                                            .remote_node_id = transfer->source_node_id,
                                            .transfer_id    = transfer->transfer_id },
@@ -359,7 +359,7 @@ static void on_topic_for_each(struct cy_topic_t* const cy_topic, void* const use
     }
 }
 
-static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us)
+static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline_us)
 {
     tx_offload(cy_udp); // Free up space in the TX queues and ensure all TX sockets are blocked.
 
@@ -392,12 +392,12 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
     cy_topic_for_each(&cy_udp->base, &on_topic_for_each, &rx_ctx);
 
     // Do a blocking wait.
-    const uint64_t wait_timeout = deadline_us - min_u64(cy_udp_now_us(), deadline_us);
-    cy_err_t       res          = udp_wait(wait_timeout, tx_count, tx_await, rx_ctx.count, rx_await);
+    const cy_us_t wait_timeout = deadline_us - min_i64(cy_udp_now_us(), deadline_us);
+    cy_err_t      res          = udp_wait(wait_timeout, tx_count, tx_await, rx_ctx.count, rx_await);
     if (res < 0) {
         goto hell;
     }
-    const uint64_t ts_us = cy_udp_now_us(); // immediately after unblocking
+    const cy_us_t ts_us = cy_udp_now_us(); // immediately after unblocking
 
     // Process readable handles. The writable ones will be taken care of later.
     for (size_t i = 0; i < rx_ctx.count; i++) {
@@ -450,7 +450,8 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const uint64_t de
         // Pass the data buffer into LibUDPard then into Cy for further processing. It takes ownership of the buffer.
         if (cy_topic_has_local_subscribers(&topic->base)) {
             struct UdpardRxTransfer transfer = { 0 }; // udpard takes ownership of the dgram payload buffer.
-            const int_fast8_t       er = udpardRxSubscriptionReceive(&topic->sub, ts_us, dgram, iface_index, &transfer);
+            const int_fast8_t       er =
+              udpardRxSubscriptionReceive(&topic->sub, (UdpardMicrosecond)ts_us, dgram, iface_index, &transfer);
             if (er == 1) {
                 ingest_topic(topic, &transfer);
             } else if (er == 0) {
@@ -484,11 +485,11 @@ cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp)
     return spin_once_until(cy_udp, cy_udp->base.heartbeat_next_us);
 }
 
-cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const uint64_t deadline_us)
+cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline_us)
 {
     cy_err_t res = 0;
     while (res >= 0) {
-        res = spin_once_until(cy_udp, min_u64(deadline_us, cy_udp->base.heartbeat_next_us));
+        res = spin_once_until(cy_udp, min_i64(deadline_us, cy_udp->base.heartbeat_next_us));
         if (deadline_us <= cy_udp_now_us()) {
             break;
         }

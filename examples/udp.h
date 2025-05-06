@@ -115,7 +115,7 @@ void udp_rx_close(struct udp_rx_t* const self);
 ///     struct void* rx_context[max_rx_handles];                // Parallel array of context data.
 ///     int16_t err = udp_wait(timeout_us, UDPARD_IFACE_COUNT_MAX, tx_handles, max_rx_handles, rx_handles);
 ///     // Then handle the results.
-int16_t udp_wait(const uint64_t          timeout_us,
+int16_t udp_wait(const int64_t           timeout_us,
                  const size_t            tx_count,
                  struct udp_tx_t** const tx,
                  const size_t            rx_count,
