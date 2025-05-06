@@ -338,12 +338,12 @@ static uint64_t topic_hash(const char* const name)
     return hash;
 }
 
-static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t lamport_clock)
+static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t n_collisions)
 {
     if (is_pinned(hash)) {
         return (uint16_t)hash; // Pinned topics may exceed CY_TOPIC_SUBJECT_COUNT.
     }
-    return (uint16_t)((hash + lamport_clock) % CY_TOPIC_SUBJECT_COUNT);
+    return (uint16_t)((hash + n_collisions) % CY_TOPIC_SUBJECT_COUNT);
 }
 
 /// Increments the subject-ID of the topic until a free slot is found, which is then taken.
@@ -356,7 +356,7 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t lamport
 /// we have, it means that there was a collision and we have to follow suit. The incrementing stops until no more
 /// collisions occur, or when we displace another topic by winning arbitration.
 ///
-/// The new lamport clock cannot be zero if we're reallocating the topic. The only case when it's zero is when the
+/// The new collision counter cannot be zero if we're reallocating the topic. The only case when it's zero is when the
 /// topic is locally created for the first time. In this case, there is no need to remove it from the subject index.
 ///
 /// This function will schedule all affected topics for gossip, including the one that is being moved.
@@ -366,7 +366,7 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t lamport
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greater_lamport)
+static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_collisions)
 {
     struct cy_t* const cy = topic->cy;
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
@@ -375,14 +375,14 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greate
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
-             "%*sAllocating '%s' hash %016llx subject %04x lamport %llu->%llu subscribed %d...",
+             "%*sAllocating '%s' hash %016llx subject %04x collisions %llu->%llu subscribed %d...",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
              (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
-             (unsigned long long)topic->lamport_clock,
-             (unsigned long long)greater_lamport,
+             (unsigned long long)topic->n_collisions,
+             (unsigned long long)new_collisions,
              (int)topic->subscribed);
 
     // We need to make sure no underlying resources are sitting on this topic before we move it.
@@ -392,8 +392,8 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greate
         topic->subscribed = false;
     }
 
-    // We're not allowed to alter the Lamport clock as long as the topic remains in the tree! So we remove it first.
-    if (greater_lamport > 0) { // If zero, the topic is not yet in the tree.
+    // We're not allowed to alter the collision counter as long as the topic remains in the tree! So we remove it first.
+    if (new_collisions > 0) { // If zero, the topic is not yet in the tree because it's new.
         cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
 
@@ -402,8 +402,8 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greate
     schedule_gossip_asap(topic);
 
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
-    topic->lamport_clock = greater_lamport;
-    size_t iter_count    = 0;
+    topic->n_collisions = new_collisions;
+    size_t iter_count   = 0;
     while (true) {
         iter_count++;
         struct cy_tree_t* const t = cavlSearch(&cy->topics_by_subject_id, //
@@ -418,12 +418,12 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greate
         struct cy_topic_t* const other = (struct cy_topic_t*)((char*)t - offsetof(struct cy_topic_t, index_subject_id));
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
         if (topic->hash > other->hash) {
-            topic->lamport_clock++; // We lost arbitration, keep looking.
+            topic->n_collisions++; // We lost arbitration, keep looking.
         } else {
             // This is our slot now! The other topic has to move.
             // This can trigger a chain reaction that in the worst case can leave no topic unturned.
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
-            allocate_topic(other, other->lamport_clock + 1U);
+            allocate_topic(other, other->n_collisions + 1U);
             // Remember that we're still out of tree at the moment. We pushed the other topic out of its slot,
             // but it is possible that there was a chain reaction that caused someone else to occupy this slot.
             // Since that someone else was ultimately pushed out by the topic that just lost arbitration to us,
@@ -445,12 +445,12 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greate
     }
 
     CY_TRACE(cy,
-             "%*s...allocated '%s' subject %04x lamport %llu subscribed %d iterations %zu",
+             "%*s...allocated '%s' subject %04x collisions %llu subscribed %d iterations %zu",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
              cy_topic_get_subject_id(topic),
-             (unsigned long long)topic->lamport_clock,
+             (unsigned long long)topic->n_collisions,
              (int)topic->subscribed,
              iter_count);
     assert(call_depth > 0);
@@ -512,7 +512,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t
     // TODO: communicate how the topic is used: in/out, some other metadata?
     const struct heartbeat_t msg = make_heartbeat(now - cy->started_at_us, //
                                                   cy->uid,
-                                                  topic->lamport_clock,
+                                                  topic->n_collisions,
                                                   topic->hash,
                                                   topic->name_length,
                                                   topic->name);
@@ -591,7 +591,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             // 1. their names are canonical, so a name clash is not possible.
             // 2. their hash is just the pinned ID, which is guaranteed to be less than any real hash.
             assert(!is_pinned(mine->hash) && !is_pinned(other->hash));
-            allocate_topic(mine, mine->lamport_clock + 1U);
+            allocate_topic(mine, mine->n_collisions + 1U);
         } else {
             schedule_gossip_asap(mine);
         }
@@ -599,25 +599,25 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
         // non-viable because someone had to increment it, so there was a collision.
         assert(mine->hash == other->hash);
-        if (mine->lamport_clock < other->value) {
+        if (mine->n_collisions < other->value) {
             // Ours is older than the one in the message, meaning that we have to catch up.
             // But it could be that the subject-ID allocated by the other node does not suit us because we have a local
             // topic there already. In that case, we will simply keep bumping it until a free slot is found.
             // Since that free slot will be higher than what we just received, we become the winner in this transaction,
             // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
             CY_TRACE(cy,
-                     "Topic '%s' hash %016llx Lamport rewind %llu -> %llu to restore consensus",
+                     "Topic '%s' hash %016llx collision fastforward %llu -> %llu to restore consensus",
                      mine->name,
                      (unsigned long long)mine->hash,
-                     (unsigned long long)mine->lamport_clock,
+                     (unsigned long long)mine->n_collisions,
                      (unsigned long long)other->value);
             const uint64_t old_last_gossip_us = mine->last_gossip_us;
             allocate_topic(mine, other->value);
-            if (mine->lamport_clock == other->value) {
+            if (mine->n_collisions == other->value) {
                 // We caught up exactly, we are in consensus, so there is no point gossipping this topic for now.
                 update_last_gossip_time(mine, old_last_gossip_us);
             }
-        } else if (mine->lamport_clock > other->value) {
+        } else if (mine->n_collisions > other->value) {
             // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
             // so the other has to catch up.
             schedule_gossip_asap(mine);
@@ -833,7 +833,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     memcpy(topic->name, name, smaller(topic->name_length, CY_TOPIC_NAME_MAX));
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
     topic->hash                    = topic_hash(name);
-    topic->lamport_clock           = 0; // starting from the preferred subject-ID.
+    topic->n_collisions            = 0; // starting from the preferred subject-ID.
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
@@ -937,7 +937,7 @@ void cy_topic_for_each(struct cy_t* const cy,
 
 uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic)
 {
-    return topic_get_subject_id(topic->hash, topic->lamport_clock);
+    return topic_get_subject_id(topic->hash, topic->n_collisions);
 }
 
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,

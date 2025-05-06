@@ -186,9 +186,13 @@ struct cy_topic_t
     /// For pinned topics, the name hash equals the subject-ID.
     uint64_t hash;
 
-    /// The lamport clock MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
-    /// Remember that the subject-ID is (for non-pinned topics): (hash+lamport_clock)%topic_count.
-    uint64_t lamport_clock;
+    /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
+    /// collision counter incremented. The collision counter is used as a Lamport clock counting the loss events.
+    /// Higher Lamport clock (collision counter) wins because it implies that any lower value is non-viable since
+    /// it has been known to cause at least one collision anywhere on the network.
+    /// The counter MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
+    /// Remember that the subject-ID is (for non-pinned topics): (hash+n_collisions)%topic_count.
+    uint64_t n_collisions;
 
     /// Updated whenever the topic is gossiped.
     ///
