@@ -29,7 +29,7 @@ static void default_rx_sock_err_handler(struct cy_udp_topic_t* const topic,
                                         const uint_fast8_t           iface_index,
                                         const int16_t                error)
 {
-    CY_TRACE(topic->base.cy, "RX socket error on iface #%u topic %s: %d", iface_index, topic->base.name, error);
+    CY_TRACE(topic->base.cy, "RX socket error on iface #%u topic '%s': %d", iface_index, topic->base.name, error);
 }
 
 cy_us_t cy_udp_now_us(void)

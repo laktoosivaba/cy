@@ -197,11 +197,20 @@ struct cy_topic_t
 
     /// Ranks this topic by how widely it is used on the network AND by its age.
     /// The initial value is zero and it grows with time, the rate of growth is determined by the number of users.
+    ///
     /// Topics with greater respect are less likely to be defeated, which is a critical property for ensuring
-    /// stability of the network. Given a conflict, more respected topic stays, while newcomers and rarely used
+    /// stability of the network. In a conflict, more respected topic stays, while newcomers and rarely used
     /// topics that are yet to earn respect have to adapt. When a topic is defeated, its respect is reset to zero.
-    /// A topic that nobody else is using will keep its respect at zero.
-    /// TODO CAVEAT: a single node publishing heartbeats more often will inflate the respect of its topics.
+    ///
+    /// A topic that nobody else is using will keep its respect at zero, reflecting the fact that it can be moved
+    /// at no cost without disrupting communication.
+    ///
+    /// The respect counter is a CRDT G-counter which also serves as a Lamport clock.
+    /// The merge operation is performed whenever a gossip message of this topic is received as: R'=max(R,R_other)+1.
+    /// This value is useful for logical event ordering, but it is not an accurate representation of the actual usage
+    /// of the topic in the network, because the increment rate depends on the gossip rate of the topic info by others,
+    /// which in turn depends on the heartbeat rates of the other participants and on the number of other topics they
+    /// have to round-robin through.
     uint64_t respect;
 
     /// Updated whenever the topic is gossiped.

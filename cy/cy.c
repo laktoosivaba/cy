@@ -308,8 +308,7 @@ static void schedule_gossip_asap(struct cy_topic_t* const topic)
 {
     assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
     if (topic->last_gossip_us > 0) {                  // Don't do anything if it's already scheduled.
-        CY_TRACE(
-          topic->cy, "Rescheduling topic '%s'@%04x for gossip ASAP", topic->name, cy_topic_get_subject_id(topic));
+        CY_TRACE(topic->cy, "'%s' @%04x", topic->name, cy_topic_get_subject_id(topic));
         // This is an optional optimization: if this is a pinned topic, it normally cannot collide with another one
         // (unless the user placed it in the dynamically allocated subject-ID range, which is not our problem);
         // we are publishing it just to announce that we have it; as such, the urgency of this action is a bit lower
@@ -395,7 +394,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
-             "%*sAllocating '%s' hash %016llx subject %04x defeats %llu->%llu respect %llu subscribed %d...",
+             "🔜%*s'%s' #%016llx @%04x defeats=%llu->%llu respect=%llu subscribed=%d sub_list=%p",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
@@ -404,7 +403,8 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
              (unsigned long long)topic->defeats,
              (unsigned long long)new_defeats,
              (unsigned long long)topic->respect,
-             (int)topic->subscribed);
+             (int)topic->subscribed,
+             (void*)topic->sub_list);
 
     // We need to make sure no underlying resources are sitting on this topic before we move it.
     // Otherwise, changing the subject-ID field on the go may break something underneath.
@@ -467,12 +467,14 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     }
 
     CY_TRACE(cy,
-             "%*s...allocated '%s' subject %04x defeats %llu subscribed %d iterations %zu",
+             "🔚%*s'%s' #%016llx @%04x defeats=%llu respect=%llu subscribed=%d iters=%zu",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
+             (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->defeats,
+             (unsigned long long)topic->respect,
              (int)topic->subscribed,
              iter_count);
     assert(call_depth > 0);
@@ -483,14 +485,12 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
 
 struct topic_gossip_t
 {
-    uint64_t value;
-    uint64_t rank;
-    uint64_t _padding_a;
+    uint64_t value[3];
     uint64_t hash;
     uint8_t  name_length;
     char     name[CY_TOPIC_NAME_MAX];
 };
-static_assert(sizeof(struct topic_gossip_t) == 8 + 8 + 8 + 8 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
+static_assert(sizeof(struct topic_gossip_t) == 8 * 3 + 8 + 1 + CY_TOPIC_NAME_MAX, "bad layout");
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
@@ -505,8 +505,7 @@ static_assert(sizeof(struct heartbeat_t) == 144, "bad layout");
 
 static struct heartbeat_t make_heartbeat(const cy_us_t     uptime_us,
                                          const uint64_t    uid,
-                                         const uint64_t    value,
-                                         const uint64_t    rank,
+                                         const uint64_t    value[3],
                                          const uint64_t    hash,
                                          const size_t      name_len,
                                          const char* const name)
@@ -515,7 +514,7 @@ static struct heartbeat_t make_heartbeat(const cy_us_t     uptime_us,
     struct heartbeat_t obj = {
         .uptime       = (uint32_t)(uptime_us / 1000000U),
         .uid          = uid,
-        .topic_gossip = { .hash = hash, .value = value, .rank = rank, .name_length = (uint8_t)name_len },
+        .topic_gossip = { .hash = hash, .value = { value[0], value[1], value[2] }, .name_length = (uint8_t)name_len },
     };
     memcpy(obj.topic_gossip.name, name, name_len);
     return obj;
@@ -530,8 +529,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const cy_us_t 
     // TODO: communicate how the topic is used: in/out, some other metadata?
     const struct heartbeat_t msg = make_heartbeat(now - cy->started_at_us, //
                                                   cy->uid,
-                                                  topic->defeats,
-                                                  topic->respect,
+                                                  (uint64_t[3]){ topic->defeats, topic->respect, 0 },
                                                   topic->hash,
                                                   topic->name_length,
                                                   topic->name);
@@ -568,26 +566,29 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     // Deserialize the message. TODO: deserialize properly.
     struct heartbeat_t heartbeat = { 0 };
     memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat)));
-    const struct topic_gossip_t* const other = &heartbeat.topic_gossip;
+    const struct topic_gossip_t* const gossip = &heartbeat.topic_gossip;
     // Even though we may not always deserialize the full name, we do always deserialize the name length field.
-    if ((other->name_length == 0) || (other->name[0] != '/')) {
+    if ((gossip->name_length == 0) || (gossip->name[0] != '/')) {
         return; // Not a topic.
     }
+    const uint64_t other_hash    = gossip->hash;
+    const uint64_t other_defeats = gossip->value[0];
+    const uint64_t other_respect = gossip->value[1];
 
     // Find the topic in our local database.
     struct cy_t* const cy   = sub->topic->cy;
-    struct cy_topic_t* mine = cy_topic_find_by_hash(cy, other->hash);
+    struct cy_topic_t* mine = cy_topic_find_by_hash(cy, other_hash);
     if (mine == NULL) { // We don't know this topic, but we still need to check for a subject-ID collision.
-        mine = cy_topic_find_by_subject_id(cy, topic_get_subject_id(other->hash, other->value));
+        mine = cy_topic_find_by_subject_id(cy, topic_get_subject_id(other_hash, other_defeats));
         if (mine == NULL) {
             return; // We are not using this subject-ID, no collision.
         }
-        assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other->hash, other->value));
-        const bool win = left_wins(mine, other->rank, other->hash);
+        assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other_hash, other_defeats));
+        const bool win = left_wins(mine, other_respect, other_hash);
         CY_TRACE(cy,
-                 "Collision on subject %04x discovered via gossip from %016llx %04x; we %s:\n"
-                 "\t local  topic hash %016llx defeats %llu respect %llu name '%s'\n"
-                 "\t remote topic hash %016llx defeats %llu respect %llu name '%s'",
+                 "Topic collision 💥 @%04x discovered via gossip from uid=%016llx nid=%04x; we %s. Contestants:\n"
+                 "\t local  #%016llx defeats=%llu respect=%llu '%s'\n"
+                 "\t remote #%016llx defeats=%llu respect=%llu '%s'",
                  cy_topic_get_subject_id(mine),
                  (unsigned long long)heartbeat.uid,
                  transfer.remote_node_id,
@@ -596,10 +597,10 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
                  (unsigned long long)mine->defeats,
                  (unsigned long long)mine->respect,
                  mine->name,
-                 (unsigned long long)other->hash,
-                 (unsigned long long)other->value,
-                 (unsigned long long)other->rank,
-                 other->name);
+                 (unsigned long long)other_hash,
+                 (unsigned long long)other_defeats,
+                 (unsigned long long)other_respect,
+                 gossip->name);
         // We have a subject-ID collision. Decide which one has to move.
         //
         // We don't need to do anything if we won, but we need to announce to the network (in particular to the
@@ -616,26 +617,27 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     } else { // We have this topic! Check if we have consensus on the subject-ID.
         // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
         // non-viable because someone had to increment it, so there was a collision.
-        assert(mine->hash == other->hash);
-        if (mine->defeats < other->value) {
+        assert(mine->hash == other_hash);
+        if (mine->defeats < other_defeats) {
             // Ours is older than the one in the message, meaning that we have to catch up.
             // But it could be that the subject-ID allocated by the other node does not suit us because we have a local
             // topic there already. In that case, we will simply keep bumping it until a free slot is found.
             // Since that free slot will be higher than what we just received, we become the winner in this transaction,
             // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
             CY_TRACE(cy,
-                     "Topic '%s' hash %016llx fastforward defeats %llu -> %llu to restore consensus",
+                     "Topic '%s' #%016llx @%04x fastforward defeats=%llu->%llu",
                      mine->name,
                      (unsigned long long)mine->hash,
+                     cy_topic_get_subject_id(mine),
                      (unsigned long long)mine->defeats,
-                     (unsigned long long)other->value);
+                     (unsigned long long)other_defeats);
             const cy_us_t old_last_gossip_us = mine->last_gossip_us;
-            allocate_topic(mine, other->value);
-            if (mine->defeats == other->value) {
+            allocate_topic(mine, other_defeats);
+            if (mine->defeats == other_defeats) {
                 // We caught up exactly, we are in consensus, so there is no point gossipping this topic for now.
                 update_last_gossip_time(mine, old_last_gossip_us);
             }
-        } else if (mine->defeats > other->value) {
+        } else if (mine->defeats > other_defeats) {
             // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
             // so the other has to catch up.
             schedule_gossip_asap(mine);
@@ -645,10 +647,22 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
 
         // Synchronize the respect only if we have a matching allocation.
         // A mismatch here could occur if the other party has moved to a new subject-ID, but it is taken on our side,
-        // so we have to propose another one.
-        assert(mine->hash == other->hash);
-        if (mine->defeats == other->value) {
-            mine->respect = max_u64(mine->respect, other->rank) + 1U;
+        // so we had to propose another one.
+        assert(mine->hash == other_hash);
+        if (mine->defeats == other_defeats) {
+            if (mine->respect > other_respect) {
+                CY_TRACE(cy,
+                         "Topic '%s' #%016llx @%04x defeats=%llu respect=%llu: remote peer disrespected: %llu. "
+                         "Gossip ASAP to avoid losing the subject-ID allocation.",
+                         mine->name,
+                         (unsigned long long)mine->hash,
+                         cy_topic_get_subject_id(mine),
+                         (unsigned long long)mine->defeats,
+                         (unsigned long long)mine->respect,
+                         (unsigned long long)other_respect);
+                schedule_gossip_asap(mine);
+            }
+            mine->respect = max_u64(mine->respect, other_respect) + 1U;
         }
     }
 }
@@ -731,8 +745,6 @@ cy_err_t cy_new(struct cy_t* const             cy,
             cy_topic_destroy(cy->heartbeat_topic);
         }
     }
-
-    CY_TRACE(cy, "cy_new(%p)->%d", (void*)cy, res);
     return res;
 }
 
@@ -751,7 +763,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
         // The mean extra time is chosen to be simply two heartbeat periods.
         cy->heartbeat_next_us += random_uint(1, 3 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
         CY_TRACE(cy,
-                 "Discovered neighbor %u publishing on '%s'@%u; new Bloom popcount %zu",
+                 "🔭 Discovered neighbor %04x publishing on '%s'@%04x; new Bloom popcount %zu",
                  metadata.remote_node_id,
                  topic->name,
                  cy_topic_get_subject_id(topic),
@@ -785,7 +797,7 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
         assert(cy->node_id <= cy->node_id_max);
         res = cy->transport.set_node_id(cy);
         CY_TRACE(cy,
-                 "Picked own node-ID %u; Bloom popcount %zu; set_node_id()->%d",
+                 "Picked own node-ID %04x; Bloom popcount %zu; set_node_id()->%d",
                  cy->node_id,
                  popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage),
                  res);
@@ -812,7 +824,7 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic)
 {
     // Schedule the topic for gossiping ASAP, unless it is already scheduled.
     if ((topic != NULL) && (topic->last_gossip_us > 0)) {
-        CY_TRACE(topic->cy, "Discriminator collision on '%s'@%u", topic->name, cy_topic_get_subject_id(topic));
+        CY_TRACE(topic->cy, "💥 '%s'@%04x", topic->name, cy_topic_get_subject_id(topic));
         // Topics with the same time will be ordered FIFO -- the tree is stable.
         schedule_gossip_asap(topic);
         // We could subtract the heartbeat period from the next heartbeat time to make it come out sooner,
@@ -827,7 +839,7 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
         return; // We are not using a node-ID, nothing to do.
     }
     CY_TRACE(cy,
-             "Node-ID collision on %u; Bloom purge with popcount %zu",
+             "💥 node-ID %04x; Bloom purge with popcount %zu",
              cy->node_id,
              popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage));
     // We must reset the Bloom filter because there may be tombstones in it.
@@ -868,40 +880,41 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->sub_list        = NULL;
     topic->subscribed      = false;
 
-    bool ok = (topic->name_length > 1) && (topic->name_length <= CY_TOPIC_NAME_MAX) && (topic->name[0] == '/') &&
-              (cy->topic_count < CY_TOPIC_SUBJECT_COUNT);
+    if ((topic->name_length == 0) || (topic->name_length > CY_TOPIC_NAME_MAX) || (topic->name[0] != '/') ||
+        (cy->topic_count >= CY_TOPIC_SUBJECT_COUNT)) {
+        goto hell;
+    }
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.
-    if (ok) {
-        const struct cy_tree_t* const res_tree =
-          cavlSearch(&cy->topics_by_hash, topic, &cavl_predicate_topic_hash, &cavl_factory_topic_hash);
-        assert(res_tree != NULL);
-        ok = res_tree == &topic->index_hash; // Reject if the name is already taken.
+    const struct cy_tree_t* const res_tree =
+      cavlSearch(&cy->topics_by_hash, topic, &cavl_predicate_topic_hash, &cavl_factory_topic_hash);
+    assert(res_tree != NULL);
+    if (res_tree != &topic->index_hash) { // Reject if the name is already taken.
+        goto hell;
     }
 
-    if (ok) {
-        // Ensure the topic is in the gossip index. This is needed for allocation.
-        topic->last_gossip_us = 0;
-        (void)cavlSearch(
-          &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
+    // Ensure the topic is in the gossip index. This is needed for allocation.
+    topic->last_gossip_us = 0;
+    (void)cavlSearch(
+      &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
 
-        // Allocate a subject-ID for the topic and insert it into the subject index tree.
-        // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
-        // meaning that another pinned topic is not occupying the same subject-ID.
-        // Remember that topics arbitrate locally the same way they do externally, meaning that adding a new local topic
-        // may displace another local one.
-        allocate_topic(topic, 0);
+    // Allocate a subject-ID for the topic and insert it into the subject index tree.
+    // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
+    // meaning that another pinned topic is not occupying the same subject-ID.
+    // Remember that topics arbitrate locally the same way they do externally, meaning that adding a new local topic
+    // may displace another local one.
+    allocate_topic(topic, 0);
 
-        cy->topic_count++;
-        CY_TRACE(cy,
-                 "New topic '%s'@%u [%zu total], hash %016llx, last gossip %lld us",
-                 topic->name,
-                 cy_topic_get_subject_id(topic),
-                 cy->topic_count,
-                 (unsigned long long)topic->hash,
-                 (long long)topic->last_gossip_us);
-    }
-    return ok;
+    cy->topic_count++;
+    CY_TRACE(cy,
+             "🆕'%s' #%016llx @%04x: topic_count=%zu",
+             topic->name,
+             (unsigned long long)topic->hash,
+             cy_topic_get_subject_id(topic),
+             cy->topic_count);
+    return true;
+hell:
+    return false;
 }
 
 void cy_topic_destroy(struct cy_topic_t* const topic)
@@ -1016,8 +1029,9 @@ cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
         topic->subscribed = err >= 0;
     }
     CY_TRACE(topic->cy,
-             "New subscription to '%s'@%u, extent %zu; subscribe()->%d",
+             "🆕'%s' #%016llx @%04x extent=%zu subscribe()->%d",
              topic->name,
+             (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
              extent,
              err);
