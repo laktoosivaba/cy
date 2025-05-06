@@ -187,12 +187,12 @@ struct cy_topic_t
     uint64_t hash;
 
     /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
-    /// collision counter incremented. The collision counter is used as a Lamport clock counting the loss events.
-    /// Higher Lamport clock (collision counter) wins because it implies that any lower value is non-viable since
+    /// defeat counter incremented. The defeat counter is used as a Lamport clock counting the loss events.
+    /// Higher Lamport clock (defeat counter) wins because it implies that any lower value is non-viable since
     /// it has been known to cause at least one collision anywhere on the network.
     /// The counter MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
-    /// Remember that the subject-ID is (for non-pinned topics): (hash+n_collisions)%topic_count.
-    uint64_t n_collisions;
+    /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
+    uint64_t defeats;
 
     /// Updated whenever the topic is gossiped.
     ///
