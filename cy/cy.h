@@ -195,23 +195,32 @@ struct cy_topic_t
     /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
     uint64_t defeats;
 
-    /// Ranks this topic by how widely it is used on the network AND by its age.
-    /// The initial value is zero and it grows with time, the rate of growth is determined by the number of users.
+    /// Estimate of the time when this topic has first appeared on the network.
+    /// This is computed as a CRDT min() merge across all nodes.
+    /// It is used in subject-ID conflict resolution to determine which topic should be moved;
+    /// the one with the greater inception time (lower age) has to move.
     ///
-    /// Topics with greater respect are less likely to be defeated, which is a critical property for ensuring
-    /// stability of the network. In a conflict, more respected topic stays, while newcomers and rarely used
-    /// topics that are yet to earn respect have to adapt. When a topic is defeated, its respect is reset to zero.
+    /// This is designed to avoid disturbing the network when a new topic is introduced,
+    /// forcing new topics to adapt to the network rather than the other way around.
     ///
-    /// A topic that nobody else is using will keep its respect at zero, reflecting the fact that it can be moved
-    /// at no cost without disrupting communication.
-    ///
-    /// The respect counter is a CRDT G-counter which also serves as a Lamport clock.
-    /// The merge operation is performed whenever a gossip message of this topic is received as: R'=max(R,R_other)+1.
-    /// This value is useful for logical event ordering, but it is not an accurate representation of the actual usage
-    /// of the topic in the network, because the increment rate depends on the gossip rate of the topic info by others,
-    /// which in turn depends on the heartbeat rates of the other participants and on the number of other topics they
-    /// have to round-robin through.
-    uint64_t respect;
+    /// The inception is not communicated directly because we do not require all nodes to have synchronized time.
+    /// Instead, we publish the age of the topic, which is the difference between the current time and the inception
+    /// computed locally before publication:
+    ///     age = now_a - inception_a
+    /// where now_a is the local time on node A. When a remote node B receives the age, it obtains its own inception
+    /// estimate in its local time system:
+    ///     inception_b = now_b + t_prop - age
+    /// where t_prop is the network propagation delay. Let delta = now_a - now_b, then:
+    ///     inception_b = now_a - delta + t_prop - age
+    /// Express in the original time system:
+    ///     inception_a = now_a + t_prop - age
+    /// Meaning that by the arrival to a remote node, the inception estimate is increased by t_prop.
+    /// Then, the CRDT merge computes the new local replica of the inception time:
+    ///     inception = min(inception_local, inception_remote)
+    /// The resulting behavior is that the inception estimate will reach a stable state defined by the worst seen
+    /// network propagation delay. This is desirable because for a CRDT to reach eventual consistency, the state
+    /// should remain quiescent for a while.
+    cy_us_t inception;
 
     /// Updated whenever the topic is gossiped.
     ///

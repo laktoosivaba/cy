@@ -18,9 +18,9 @@ static size_t smaller(const size_t a, const size_t b)
     return (a < b) ? a : b;
 }
 
-static uint64_t max_u64(const uint64_t a, const uint64_t b)
+static int64_t min_i64(const int64_t a, const int64_t b)
 {
-    return (a > b) ? a : b;
+    return (a < b) ? a : b;
 }
 
 #if CY_CONFIG_TRACE
@@ -281,16 +281,16 @@ static bool is_pinned(const uint64_t hash)
 }
 
 /// Pinned topics always win regardless. Pinned topic names are canonical, which ensures that one pinned topic
-/// cannot collide with another pinned topic.
-static bool left_wins(const struct cy_topic_t* const left, const uint64_t right_respect, const uint64_t right_hash)
+/// cannot collide with another.
+static bool left_wins(const struct cy_topic_t* const left, const cy_us_t right_inception, const uint64_t right_hash)
 {
     if (is_pinned(left->hash) != is_pinned(right_hash)) {
         return is_pinned(left->hash);
     }
-    if (left->respect == right_respect) {
-        return left->hash < right_hash; // tie breaker
+    if (left->inception == right_inception) {
+        return left->hash < right_hash; // unlikely tie breaker
     }
-    return left->respect > right_respect;
+    return left->inception < right_inception; // older topic wins
 }
 
 /// log(N) index update requires removal and reinsertion.
@@ -367,29 +367,14 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats
     return (uint16_t)((hash + defeats) % CY_TOPIC_SUBJECT_COUNT);
 }
 
-/// Increments the subject-ID of the topic until a free slot is found, which is then taken.
-/// Remember that we have a hard guarantee that there are not more local topics than available subject-IDs,
-/// meaning that this function is infallible.
-///
-/// Consider: every time a topic collides with another one, one of them has to move. The more defeats a topic has
-/// seen, the further away it is from its preferred subject-ID. A topic never moves back (under modular arithmetic).
-/// Meaning that whatever value of a subject-ID we receive from the network, if it's greater (modulo wise) than what
-/// we have, it means that there was a collision and we have to follow suit. The incrementing stops until no more
-/// collisions occur, or when we displace another topic by winning arbitration.
-///
-/// The new defeat counter cannot be zero if we're reallocating the topic. The only case when it's zero is when the
-/// topic is locally created for the first time. In this case, there is no need to remove it from the subject index.
-///
-/// When a topic is moved, its respect is reset to zero.
-///
 /// This function will schedule all affected topics for gossip, including the one that is being moved.
-/// Sometimes this is undesirable; in that case the caller can restore the next gossip time after the call.
+/// If this is undesirable, the caller can restore the next gossip time after the call.
 ///
 /// The complexity is O(N log(N)) where N is the number of local topics. This is because we have to search the AVL
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_defeats)
+static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_defeats, const bool virgin)
 {
     struct cy_t* const cy = topic->cy;
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
@@ -398,7 +383,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
-             "🔜%*s'%s' #%016llx @%04x defeats=%llu->%llu respect=%llu subscribed=%d sub_list=%p",
+             "🔜%*s'%s' #%016llx @%04x defeats=%llu->%llu inception=%lld subscribed=%d sub_list=%p",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
@@ -406,7 +391,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->defeats,
              (unsigned long long)new_defeats,
-             (unsigned long long)topic->respect,
+             (long long)topic->inception,
              (int)topic->subscribed,
              (void*)topic->sub_list);
 
@@ -418,10 +403,9 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     }
 
     // We're not allowed to alter the defeat counter as long as the topic remains in the tree! So we remove it first.
-    if (new_defeats > 0) { // If zero, the topic is not yet in the tree because it's new.
+    if (!virgin) {
         cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
-    topic->respect = 0;
 
     // Whenever we alter a topic, we need to make sure that everyone knows about it.
     // Recursively we can alter a lot of topics like this.
@@ -443,13 +427,12 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
         // Someone else is sitting on that subject-ID. We need to arbitrate.
         struct cy_topic_t* const other = (struct cy_topic_t*)((char*)t - offsetof(struct cy_topic_t, index_subject_id));
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
-        if (topic->hash > other->hash) {
-            topic->defeats++; // We lost arbitration, keep looking.
-        } else {
+        const bool win = left_wins(topic, other->inception, other->hash);
+        if (win) {
             // This is our slot now! The other topic has to move.
             // This can trigger a chain reaction that in the worst case can leave no topic unturned.
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
-            allocate_topic(other, other->defeats + 1U);
+            allocate_topic(other, other->defeats + 1U, false);
             // Remember that we're still out of tree at the moment. We pushed the other topic out of its slot,
             // but it is possible that there was a chain reaction that caused someone else to occupy this slot.
             // Since that someone else was ultimately pushed out by the topic that just lost arbitration to us,
@@ -457,6 +440,8 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
             // We will handle it in the exact same way on the next iteration, so we just continue with the loop.
             // Now, moving that one could also cause a chain reaction, but we know that eventually we will run
             // out of low-rank topics to move and will succeed.
+        } else {
+            topic->defeats++; // We lost arbitration, keep looking.
         }
     }
 
@@ -471,14 +456,14 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     }
 
     CY_TRACE(cy,
-             "🔚%*s'%s' #%016llx @%04x defeats=%llu respect=%llu subscribed=%d iters=%zu",
+             "🔚%*s'%s' #%016llx @%04x defeats=%llu inception=%lld subscribed=%d iters=%zu",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
              (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->defeats,
-             (unsigned long long)topic->respect,
+             (long long)topic->inception,
              (int)topic->subscribed,
              iter_count);
     assert(call_depth > 0);
@@ -530,10 +515,12 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const cy_us_t 
     const struct cy_t* const cy = topic->cy;
 
     // Construct the heartbeat message.
+    const cy_us_t topic_age = now - topic->inception;
+    assert(topic_age >= 0);
     // TODO: communicate how the topic is used: in/out, some other metadata?
-    const struct heartbeat_t msg = make_heartbeat(now - cy->started_at_us, //
+    const struct heartbeat_t msg = make_heartbeat(now - cy->started_at_us,
                                                   cy->uid,
-                                                  (uint64_t[3]){ topic->defeats, topic->respect, 0 },
+                                                  (uint64_t[3]){ topic->defeats, (uint64_t)topic_age, 0 },
                                                   topic->hash,
                                                   topic->name_length,
                                                   topic->name);
@@ -564,8 +551,6 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     if (payload.size < (sizeof(struct heartbeat_t) - CY_TOPIC_NAME_MAX)) {
         return; // This is an old uavcan.node.Heartbeat.1 message, ignore it because it has no CRDT gossip data.
     }
-    (void)ts_us;
-    (void)transfer;
 
     // Deserialize the message. TODO: deserialize properly.
     struct heartbeat_t heartbeat = { 0 };
@@ -575,9 +560,9 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     if ((gossip->name_length == 0) || (gossip->name[0] != '/')) {
         return; // Not a topic.
     }
-    const uint64_t other_hash    = gossip->hash;
-    const uint64_t other_defeats = gossip->value[0];
-    const uint64_t other_respect = gossip->value[1];
+    const uint64_t other_hash      = gossip->hash;
+    const uint64_t other_defeats   = gossip->value[0];
+    const cy_us_t  other_inception = ts_us - (cy_us_t)gossip->value[1];
 
     // Find the topic in our local database.
     struct cy_t* const cy   = sub->topic->cy;
@@ -588,25 +573,23 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             return; // We are not using this subject-ID, no collision.
         }
         assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other_hash, other_defeats));
-        const bool win = left_wins(mine, other_respect, other_hash);
+        const bool win = left_wins(mine, other_inception, other_hash);
         CY_TRACE(cy,
                  "Topic collision 💥 @%04x discovered via gossip from uid=%016llx nid=%04x; we %s. Contestants:\n"
-                 "\t local  #%016llx defeats=%llu respect=%llu '%s'\n"
-                 "\t remote #%016llx defeats=%llu respect=%llu '%s'",
+                 "\t local  #%016llx defeats=%llu inception=%lld '%s'\n"
+                 "\t remote #%016llx defeats=%llu inception=%lld '%s'",
                  cy_topic_get_subject_id(mine),
                  (unsigned long long)heartbeat.uid,
                  transfer.remote_node_id,
                  (win ? "WIN" : "LOSE"),
                  (unsigned long long)mine->hash,
                  (unsigned long long)mine->defeats,
-                 (unsigned long long)mine->respect,
+                 (long long)mine->inception,
                  mine->name,
                  (unsigned long long)other_hash,
                  (unsigned long long)other_defeats,
-                 (unsigned long long)other_respect,
+                 (long long)other_inception,
                  gossip->name);
-        // We have a subject-ID collision. Decide which one has to move.
-        //
         // We don't need to do anything if we won, but we need to announce to the network (in particular to the
         // infringing node) that we are using this subject-ID, so that the loser knows that it has to move.
         //
@@ -614,65 +597,54 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // will also move, but the trick is that the others could have settled on different subject-IDs.
         // Everyone needs to publish their own new allocation and then we will pick max subject-ID out of that.
         if (!win) {
-            allocate_topic(mine, mine->defeats + 1U);
+            allocate_topic(mine, mine->defeats + 1U, false);
         } else {
             schedule_gossip_asap(mine);
         }
     } else { // We have this topic! Check if we have consensus on the subject-ID.
-        // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
-        // non-viable because someone had to increment it, so there was a collision.
         assert(mine->hash == other_hash);
-        if (mine->defeats < other_defeats) {
-            // Ours is older than the one in the message, meaning that we have to catch up.
-            // But it could be that the subject-ID allocated by the other node does not suit us because we have a local
-            // topic there already. In that case, we will simply keep bumping it until a free slot is found.
-            // Since that free slot will be higher than what we just received, we become the winner in this transaction,
-            // so we keep the new (higher) ID and gossip ASAP to let the other node catch up.
-            CY_TRACE(cy,
-                     "Topic '%s' #%016llx @%04x fastforward defeats=%llu->%llu",
-                     mine->name,
-                     (unsigned long long)mine->hash,
-                     cy_topic_get_subject_id(mine),
-                     (unsigned long long)mine->defeats,
-                     (unsigned long long)other_defeats);
+        // Do a CRDT merge of the inception estimate. We are tracking the earliest estimate using min(x,y), which is:
+        // - commutative: min(x,y) == min(y,x)
+        // - associative: min(x,min(y,z)) == min(min(x,y),z)
+        // - idempotent: min(x,x) == x
+        // Making it a valid CRDT merge function.
+        mine->inception = min_i64(mine->inception, other_inception);
+        CY_TRACE(cy,
+                 "#%016llx: %012lld %s %012lld",
+                 (unsigned long long)mine->hash,
+                 (long long)mine->inception,
+                 (mine->inception == other_inception) ? "==" : "!=",
+                 (long long)other_inception);
+
+        if (mine->defeats == other_defeats) {
+            return; // We are in sync, nothing to do.
+        }
+        CY_TRACE(cy,
+                 "Topic '%s' #%016llx allocation divergence discovered via gossip from uid=%016llx nid=%04x:\n"
+                 "\t local  @%04x defeats=%llu inception=%lld\n"
+                 "\t remote @%04x defeats=%llu inception=%lld",
+                 mine->name,
+                 (unsigned long long)mine->hash,
+                 (unsigned long long)heartbeat.uid,
+                 transfer.remote_node_id,
+                 cy_topic_get_subject_id(mine),
+                 (unsigned long long)mine->defeats,
+                 (long long)mine->inception,
+                 topic_get_subject_id(other_hash, other_defeats),
+                 (unsigned long long)other_defeats,
+                 (long long)other_inception);
+
+        assert(mine->inception <= other_inception);
+        // TODO: ACCEPTABLE DIVERGENCE?
+        if (mine->inception == other_inception) {
+            // TODO FOCUS HERE -- NEED A TIE BREAKER?
             const cy_us_t old_last_gossip_us = mine->last_gossip_us;
-            allocate_topic(mine, other_defeats);
-            if (mine->defeats == other_defeats) {
-                // We caught up exactly, we are in consensus, so there is no point gossipping this topic for now.
+            allocate_topic(mine, other_defeats, false);
+            if (mine->defeats == other_defeats) { // perfect sync, no need to gossip
                 update_last_gossip_time(mine, old_last_gossip_us);
             }
-        } else if (mine->defeats > other_defeats) {
-            // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
-            // so the other has to catch up.
-            schedule_gossip_asap(mine);
         } else {
-            (void)0; // we are in sync, nothing to do
-        }
-
-        // Synchronize the respect only if we have a matching allocation.
-        // A mismatch here could occur if the other party had moved to a new subject-ID, but it was taken on our side,
-        // so we had to propose another one.
-        assert(mine->hash == other_hash);
-        if (mine->defeats == other_defeats) {
-            // We are tracking the maximum value using max(x,y), which is:
-            // - commutative: max(x,y) == max(y,x)
-            // - associative: max(x,max(y,z)) == max(max(x,y),z)
-            // - idempotent: max(x,x) == x
-            // Making it a valid CRDT merge function.
-            mine->respect = max_u64(mine->respect, other_respect);
-            // Having merged the value, we introduce a local change: respect incremented when we see the topic used.
-            // The new value will be eventually propagated to others when we gossip our replica.
-            // There is a curious edge case that arises when a topic is gossiped at different rates. In the limit case,
-            // suppose node A does not gossip the topic at all, while node B does. Then, the respect counter will keep
-            // growing on node A, while it will remain constant on node B. This is the expected outcome considering
-            // that CRDTs are only eventually consistent, and convergence is not possible unless there is at least
-            // intermittent communication between the nodes. As such, as soon as A gossips the topic, B will pick
-            // up the new respect value and thus eliminate the discrepancy.
-            //
-            // This is why we don't bother checking if the respect value we received is lagging behind our value:
-            // CRDT can only converge when the system has been quiescent for a while, and since we keep advancing
-            // the counter continuously, full convergence will never be achieved.
-            mine->respect++;
+            schedule_gossip_asap(mine);
         }
     }
 }
@@ -882,7 +854,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
     topic->hash                    = topic_hash(name);
     topic->defeats                 = 0; // starting from the preferred subject-ID.
-    topic->respect                 = 0;
+    topic->inception               = topic->cy->now(topic->cy);
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
@@ -913,7 +885,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     // meaning that another pinned topic is not occupying the same subject-ID.
     // Remember that topics arbitrate locally the same way they do externally, meaning that adding a new local topic
     // may displace another local one.
-    allocate_topic(topic, 0);
+    allocate_topic(topic, 0, true);
 
     cy->topic_count++;
     CY_TRACE(cy,

@@ -150,14 +150,14 @@ void on_msg_trace(struct cy_subscription_t* const subscription,
     hex[sizeof(hex) - 1] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [respect=%llu]: %s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [inception=%lld]: %s",
              cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
              payload.size,
              (unsigned long long)timestamp_us,
              subscription->topic->name,
-             (unsigned long long)subscription->topic->respect,
+             (long long)subscription->topic->inception,
              hex);
 }
 
@@ -252,7 +252,7 @@ void cy_trace(struct cy_t* const  cy,
     char            hhmmss[9] = { 0 };
     (void)strftime(hhmmss, sizeof(hhmmss), "%H:%M:%S", &tm_local);
 
-    // Print the header.
+    // Extract the file name.
     const char* file_name = strrchr(file, '/');
     if (file_name != NULL) {
         file_name++;
@@ -261,16 +261,28 @@ void cy_trace(struct cy_t* const  cy,
     } else {
         file_name = file;
     }
+
+    // Update the longest seen file name and function name.
+    static _Thread_local int longest_file_name = 10;
+    static _Thread_local int longest_func_name = 20;
+    const int                file_name_length  = (int)strlen(file_name);
+    const int                func_name_length  = (int)strlen(func);
+    longest_file_name = (longest_file_name > file_name_length) ? longest_file_name : file_name_length;
+    longest_func_name = (longest_func_name > func_name_length) ? longest_func_name : func_name_length;
+
+    // Print the header.
     static const int32_t mega = 1000000;
     fprintf(stderr,
-            "CY(%016llx %05lld.%06lld) %s.%03lld %10s:%04u:%20s: ",
+            "CY(%016llx %05lld.%06lld) %s.%03lld %*s:%04u:%*s: ",
             (unsigned long long)cy->uid,
             (long long)(uptime_us / mega),
             (long long)(uptime_us % mega),
             hhmmss,
             (long long)ts.tv_nsec / mega,
+            longest_file_name,
             file_name,
             (unsigned)line,
+            longest_func_name,
             func);
 
     // Print the message.
