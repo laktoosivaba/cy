@@ -270,6 +270,37 @@ static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t no
 
 // ----------------------------------------  TOPIC OPS  ----------------------------------------
 
+static bool is_pinned(const uint64_t hash)
+{
+    return hash < CY_TOTAL_SUBJECT_COUNT;
+}
+
+/// log(N) index update requires removal and reinsertion.
+static void update_last_gossip_time(struct cy_topic_t* const topic, const uint64_t ts_us)
+{
+    assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
+    cavlRemove(&topic->cy->topics_by_gossip_time, &topic->index_gossip_time);
+    topic->last_gossip_us              = ts_us;
+    const struct cy_tree_t* const tree = cavlSearch(
+      &topic->cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
+    assert(tree == &topic->index_gossip_time);
+}
+
+static void schedule_gossip_asap(struct cy_topic_t* const topic)
+{
+    assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
+    if (topic->last_gossip_us > 0) {                  // Don't do anything if it's already scheduled.
+        CY_TRACE(
+          topic->cy, "Rescheduling topic '%s'@%04x for gossip ASAP", topic->name, cy_topic_get_subject_id(topic));
+        // This is an optional optimization: if this is a pinned topic, it normally cannot collide with another one
+        // (unless the user placed it in the dynamically allocated subject-ID range, which is not our problem);
+        // we are publishing it just to announce that we have it; as such, the urgency of this action is a bit lower
+        // than that of an actual colliding topic announcement, so we choose next-greater time to deprioritize it.
+        const uint64_t rank = is_pinned(topic->hash) ? 1 : 0;
+        update_last_gossip_time(topic, rank);
+    }
+}
+
 /// Returns CY_SUBJECT_ID_INVALID if the string is not a valid pinned subject-ID form.
 /// Pinned topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
 /// The only requirement to ensure this is that there must be no leading zeros in the number.
@@ -293,11 +324,6 @@ static uint16_t parse_pinned(const char* s)
         }
     }
     return (uint16_t)out;
-}
-
-static bool is_pinned(const uint64_t hash)
-{
-    return hash < CY_TOTAL_SUBJECT_COUNT;
 }
 
 /// The topic hash is the key component of the protocol.
@@ -330,20 +356,33 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t lamport
 /// we have, it means that there was a collision and we have to follow suit. The incrementing stops until no more
 /// collisions occur, or when we displace another topic by winning arbitration.
 ///
+/// The new lamport clock cannot be zero if we're reallocating the topic. The only case when it's zero is when the
+/// topic is locally created for the first time. In this case, there is no need to remove it from the subject index.
+///
+/// This function will schedule all affected topics for gossip, including the one that is being moved.
+/// Sometimes this is undesirable; in that case the caller can restore the next gossip time after the call.
+///
 /// The complexity is O(N log(N)) where N is the number of local topics. This is because we have to search the AVL
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void move_topic(struct cy_topic_t* const topic, const uint64_t mew_lamport)
+static void allocate_topic(struct cy_topic_t* const topic, const uint64_t greater_lamport)
 {
     struct cy_t* const cy = topic->cy;
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
 
+    static const int         call_depth_indent = 2;
+    static _Thread_local int call_depth        = 0U;
+    call_depth++;
     CY_TRACE(cy,
-             "Reallocating topic '%s' from subject %04x, lamport clock %llu; subscribed=%d...",
+             "%*sAllocating '%s' hash %016llx subject %04x lamport %llu->%llu subscribed %d...",
+             (call_depth - 1) * call_depth_indent,
+             "",
              topic->name,
+             (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->lamport_clock,
+             (unsigned long long)greater_lamport,
              (int)topic->subscribed);
 
     // We need to make sure no underlying resources are sitting on this topic before we move it.
@@ -353,15 +392,46 @@ static void move_topic(struct cy_topic_t* const topic, const uint64_t mew_lampor
         topic->subscribed = false;
     }
 
-    // So we simply remove the topic, bump its subject-ID, and then keep doing that util it's inserted again.
-    // Remember that we're not allowed to alter the Lamport clock as long as the topic remains in the tree!
-    cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
-    topic->lamport_clock = mew_lamport;
-    while (&topic->index_subject_id != cavlSearch(&cy->topics_by_subject_id, // until inserted
-                                                  topic,
-                                                  &cavl_predicate_topic_subject_id,
-                                                  &cavl_factory_topic_subject_id)) {
-        topic->lamport_clock++;
+    // We're not allowed to alter the Lamport clock as long as the topic remains in the tree! So we remove it first.
+    if (greater_lamport > 0) { // If zero, the topic is not yet in the tree.
+        cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
+    }
+
+    // Whenever we alter a topic, we need to make sure that everyone knows about it.
+    // Recursively we can alter a lot of topics like this.
+    schedule_gossip_asap(topic);
+
+    // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
+    topic->lamport_clock = greater_lamport;
+    size_t iter_count    = 0;
+    while (true) {
+        iter_count++;
+        struct cy_tree_t* const t = cavlSearch(&cy->topics_by_subject_id, //
+                                               topic,
+                                               &cavl_predicate_topic_subject_id,
+                                               &cavl_factory_topic_subject_id);
+        assert(t != NULL); // we will create it if not found, meaning allocation succeeded
+        if (t == &topic->index_subject_id) {
+            break; // Done!
+        }
+        // Someone else is sitting on that subject-ID. We need to arbitrate.
+        struct cy_topic_t* const other = (struct cy_topic_t*)((char*)t - offsetof(struct cy_topic_t, index_subject_id));
+        assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
+        if (topic->hash > other->hash) {
+            topic->lamport_clock++; // We lost arbitration, keep looking.
+        } else {
+            // This is our slot now! The other topic has to move.
+            // This can trigger a chain reaction that in the worst case can leave no topic unturned.
+            // One issue is that the worst-case recursive call depth equals the number of topics in the system.
+            allocate_topic(other, other->lamport_clock + 1U);
+            // Remember that we're still out of tree at the moment. We pushed the other topic out of its slot,
+            // but it is possible that there was a chain reaction that caused someone else to occupy this slot.
+            // Since that someone else was ultimately pushed out by the topic that just lost arbitration to us,
+            // we know that the new squatter will lose arbitration to us again.
+            // We will handle it in the exact same way on the next iteration, so we just continue with the loop.
+            // Now, moving that one could also cause a chain reaction, but we know that eventually we will run
+            // out of low-rank topics to move and will succeed.
+        }
     }
 
     // If a subscription is needed, restore it. Notice that if this call failed in the past, we will retry here
@@ -375,11 +445,16 @@ static void move_topic(struct cy_topic_t* const topic, const uint64_t mew_lampor
     }
 
     CY_TRACE(cy,
-             "...finished moving topic '%s' to subject %04x, lamport clock %llu; subscribed=%d",
+             "%*s...allocated '%s' subject %04x lamport %llu subscribed %d iterations %zu",
+             (call_depth - 1) * call_depth_indent,
+             "",
              topic->name,
              cy_topic_get_subject_id(topic),
              (unsigned long long)topic->lamport_clock,
-             (int)topic->subscribed);
+             (int)topic->subscribed,
+             iter_count);
+    assert(call_depth > 0);
+    call_depth--;
 }
 
 // ----------------------------------------  HEARTBEAT IO  ----------------------------------------
@@ -426,22 +501,6 @@ static size_t get_heartbeat_size(const struct heartbeat_t* const obj)
     assert(obj != NULL);
     assert(obj->topic_gossip.name_length <= CY_TOPIC_NAME_MAX);
     return sizeof(*obj) - (CY_TOPIC_NAME_MAX - obj->topic_gossip.name_length);
-}
-
-/// log(N) index update requires removal and reinsertion.
-static void update_last_gossip_time(struct cy_topic_t* const topic, const uint64_t ts_us)
-{
-    cavlRemove(&topic->cy->topics_by_gossip_time, &topic->index_gossip_time);
-    topic->last_gossip_us              = ts_us;
-    const struct cy_tree_t* const tree = cavlSearch(
-      &topic->cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
-    assert(tree == &topic->index_gossip_time);
-}
-
-static void schedule_gossip_asap(struct cy_topic_t* const topic)
-{
-    CY_TRACE(topic->cy, "Rescheduling topic '%s'@%04x for gossip ASAP", topic->name, cy_topic_get_subject_id(topic));
-    update_last_gossip_time(topic, 0);
 }
 
 static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const uint64_t now)
@@ -532,9 +591,10 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
             // 1. their names are canonical, so a name clash is not possible.
             // 2. their hash is just the pinned ID, which is guaranteed to be less than any real hash.
             assert(!is_pinned(mine->hash) && !is_pinned(other->hash));
-            move_topic(mine, mine->lamport_clock + 1U);
+            allocate_topic(mine, mine->lamport_clock + 1U);
+        } else {
+            schedule_gossip_asap(mine);
         }
-        schedule_gossip_asap(mine);
     } else { // We have this topic! Check if we have consensus on the subject-ID.
         // Subject-IDs only modulo-grow on collisions. Given two values, we know that the smaller one is
         // non-viable because someone had to increment it, so there was a collision.
@@ -551,13 +611,18 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
                      (unsigned long long)mine->hash,
                      (unsigned long long)mine->lamport_clock,
                      (unsigned long long)other->value);
-            move_topic(mine, other->value);
-        }
-        // This is not else if!
-        if (mine->lamport_clock > other->value) {
+            const uint64_t old_last_gossip_us = mine->last_gossip_us;
+            allocate_topic(mine, other->value);
+            if (mine->lamport_clock == other->value) {
+                // We caught up exactly, we are in consensus, so there is no point gossipping this topic for now.
+                update_last_gossip_time(mine, old_last_gossip_us);
+            }
+        } else if (mine->lamport_clock > other->value) {
             // Our subject-ID is greater than the one in the message, meaning that we survived more collisions,
-            // so the other has to move. We simply reschedule the topic for gossip ASAP, no need to change anything.
+            // so the other has to catch up.
             schedule_gossip_asap(mine);
+        } else {
+            (void)0; // we are in sync, nothing to do
         }
     }
 }
@@ -770,12 +835,6 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->hash                    = topic_hash(name);
     topic->lamport_clock           = 0; // starting from the preferred subject-ID.
 
-    /// Schedule the first gossiping time with a simple optimization.
-    /// If this is an ordinary topic, we want this to happen ASAP to minimize collisions.
-    /// If this is a pinned topic, we can deprioritize it because we are not responsible for collision resolution
-    /// and we don't want to delay the other topics.
-    topic->last_gossip_us = is_pinned(topic->hash) ? cy->now(cy) : 0;
-
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
     topic->pub_priority    = cy_prio_nominal;
@@ -793,36 +852,19 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
         ok = res_tree == &topic->index_hash; // Reject if the name is already taken.
     }
 
-    // Allocate a subject-ID for the topic and insert it into the subject index tree.
-    // The CAVL library has a convenient "find or create" function that suits this purpose perfectly.
-    // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
-    // meaning that another pinned topic is not occupying the same subject-ID. However, if the user made the mistake
-    // of pinning the topic in the automatically managed subject-ID range, a conflict may still occur, in which case
-    // we will apply the normal allocation logic and unpin the topic to avoid conflict.
-    //
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
-    // TODO FIXME XXX APPLY SAME ARBITRATION RULES LOCALLY!
     if (ok) {
-        while (&topic->index_subject_id != cavlSearch(&cy->topics_by_subject_id, // until inserted
-                                                      topic,
-                                                      &cavl_predicate_topic_subject_id,
-                                                      &cavl_factory_topic_subject_id)) {
-            topic->lamport_clock++;
-        }
-    }
-
-    // Insert into gossip time index tree; this is a non-unique index.
-    if (ok) {
+        // Ensure the topic is in the gossip index. This is needed for allocation.
+        topic->last_gossip_us = 0;
         (void)cavlSearch(
           &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
-    }
 
-    if (ok) {
+        // Allocate a subject-ID for the topic and insert it into the subject index tree.
+        // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
+        // meaning that another pinned topic is not occupying the same subject-ID.
+        // Remember that topics arbitrate locally the same way they do externally, meaning that adding a new local topic
+        // may displace another local one.
+        allocate_topic(topic, 0);
+
         cy->topic_count++;
         CY_TRACE(cy,
                  "New topic '%s'@%u [%zu total], hash %016llx, last gossip %llu us",
