@@ -308,7 +308,11 @@ static void schedule_gossip_asap(struct cy_topic_t* const topic)
 {
     assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
     if (topic->last_gossip_us > 0) {                  // Don't do anything if it's already scheduled.
-        CY_TRACE(topic->cy, "'%s' @%04x", topic->name, cy_topic_get_subject_id(topic));
+        CY_TRACE(topic->cy,
+                 "'%s' #%016llx @%04x",
+                 topic->name,
+                 (unsigned long long)topic->hash,
+                 cy_topic_get_subject_id(topic));
         // This is an optional optimization: if this is a pinned topic, it normally cannot collide with another one
         // (unless the user placed it in the dynamically allocated subject-ID range, which is not our problem);
         // we are publishing it just to announce that we have it; as such, the urgency of this action is a bit lower
@@ -646,23 +650,29 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         }
 
         // Synchronize the respect only if we have a matching allocation.
-        // A mismatch here could occur if the other party has moved to a new subject-ID, but it is taken on our side,
+        // A mismatch here could occur if the other party had moved to a new subject-ID, but it was taken on our side,
         // so we had to propose another one.
         assert(mine->hash == other_hash);
         if (mine->defeats == other_defeats) {
-            if (mine->respect > other_respect) {
-                CY_TRACE(cy,
-                         "Topic '%s' #%016llx @%04x defeats=%llu respect=%llu: remote peer disrespected: %llu. "
-                         "Gossip ASAP to avoid losing the subject-ID allocation.",
-                         mine->name,
-                         (unsigned long long)mine->hash,
-                         cy_topic_get_subject_id(mine),
-                         (unsigned long long)mine->defeats,
-                         (unsigned long long)mine->respect,
-                         (unsigned long long)other_respect);
-                schedule_gossip_asap(mine);
-            }
-            mine->respect = max_u64(mine->respect, other_respect) + 1U;
+            // We are tracking the maximum value using max(x,y), which is:
+            // - commutative: max(x,y) == max(y,x)
+            // - associative: max(x,max(y,z)) == max(max(x,y),z)
+            // - idempotent: max(x,x) == x
+            // Making it a valid CRDT merge function.
+            mine->respect = max_u64(mine->respect, other_respect);
+            // Having merged the value, we introduce a local change: respect incremented when we see the topic used.
+            // The new value will be eventually propagated to others when we gossip our replica.
+            // There is a curious edge case that arises when a topic is gossiped at different rates. In the limit case,
+            // suppose node A does not gossip the topic at all, while node B does. Then, the respect counter will keep
+            // growing on node A, while it will remain constant on node B. This is the expected outcome considering
+            // that CRDTs are only eventually consistent, and convergence is not possible unless there is at least
+            // intermittent communication between the nodes. As such, as soon as A gossips the topic, B will pick
+            // up the new respect value and thus eliminate the discrepancy.
+            //
+            // This is why we don't bother checking if the respect value we received is lagging behind our value:
+            // CRDT can only converge when the system has been quiescent for a while, and since we keep advancing
+            // the counter continuously, full convergence will never be achieved.
+            mine->respect++;
         }
     }
 }

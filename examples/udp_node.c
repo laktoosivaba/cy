@@ -137,10 +137,10 @@ struct config_t load_config(const int argc, char* argv[])
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-void tracing_subscription_callback(struct cy_subscription_t* const subscription,
-                                   const cy_us_t                   timestamp_us,
-                                   const struct cy_transfer_meta_t metadata,
-                                   const struct cy_payload_t       payload)
+void on_msg_trace(struct cy_subscription_t* const subscription,
+                  const cy_us_t                   timestamp_us,
+                  const struct cy_transfer_meta_t metadata,
+                  const struct cy_payload_t       payload)
 {
     // Convert payload to hex.
     char hex[payload.size * 2 + 1];
@@ -150,13 +150,14 @@ void tracing_subscription_callback(struct cy_subscription_t* const subscription,
     hex[sizeof(hex) - 1] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s: %s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [respect=%llu]: %s",
              cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
              payload.size,
              (unsigned long long)timestamp_us,
              subscription->topic->name,
+             (unsigned long long)subscription->topic->respect,
              hex);
 }
 
@@ -190,11 +191,7 @@ int main(const int argc, char* argv[])
             return 1;
         }
         if (cfg.topics[i].sub) {
-            res = cy_udp_subscribe(&topics[i], //
-                                   &subs[i],
-                                   1024 * 1024,
-                                   CY_TRANSFER_ID_TIMEOUT_DEFAULT_us,
-                                   tracing_subscription_callback);
+            res = cy_udp_subscribe(&topics[i], &subs[i], 1024 * 1024, CY_TRANSFER_ID_TIMEOUT_DEFAULT_us, on_msg_trace);
             if (res < 0) {
                 fprintf(stderr, "cy_udp_subscribe: %d\n", res);
                 return 1;
@@ -266,12 +263,10 @@ void cy_trace(struct cy_t* const  cy,
     }
     static const int32_t mega = 1000000;
     fprintf(stderr,
-            "CY(%016llx %04x %05lld.%06lld \"%s\") %s.%03lld %s:%03u: %s: ",
+            "CY(%016llx %05lld.%06lld) %s.%03lld %10s:%04u:%20s: ",
             (unsigned long long)cy->uid,
-            (unsigned)cy->node_id,
             (long long)(uptime_us / mega),
             (long long)(uptime_us % mega),
-            cy->namespace_,
             hhmmss,
             (long long)ts.tv_nsec / mega,
             file_name,
