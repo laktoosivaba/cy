@@ -7,10 +7,12 @@ The solution does not require special nodes (e.g., master nodes) and is fully st
 
 ## Heartbeat extension
 
+The heartbeat message is redefined to add new topic metadata while retaining wire compatibility with the original version.
+
 ```python
 # 7509.cyphal.node.Heartbeat.2
 uint32    uptime          # [second] like in Heartbeat v1
-void16                    # Used to be health and mode
+void16                    # Used to be health and mode; now always parses as health=nominal, mode=operational
 uint16    user_word       # Used to be vendor-specific status code
 UID.0.1   uid             # New field: 64-bit unique node ID
 @assert _offset_ == {128}
@@ -57,6 +59,14 @@ Incement the age counter of the current topic.
 ### When a new heartbeat is received
 
 TODO
+
+## Compatibility with old nodes
+
+Pinned topics are introduced to communicate with old nodes that do not support named topics. A pinned topic is simply a topic that contains the decimal subject-ID in its name after the leading slash, e.g. `/123`. Leading zeros are not allowed to ensure that all such names are canonical form.
+
+While it is possible to pin a topic at any subject-ID, it is best to do it in range \[6144, 8191] to avoid collisions, since old nodes are unable to participate in the consensus protocol.
+
+From an integrator standpoint, the only difference is that topics are now assigned not via registers as numbers, but as topic name remappings as strings: `uavcan.pub.my_subject.id=1234` is now a remapping from `my_subject` to `/1234`.
 
 
 ## Missing features
