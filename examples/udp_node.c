@@ -27,6 +27,7 @@ static uint64_t arg_kv_hash(const char* s)
     return h;
 }
 
+/// The pointed strings have a static lifetime.
 struct arg_kv_t
 {
     size_t      index;    ///< Argument index, where 0 is the program name.
@@ -75,6 +76,8 @@ struct config_t
     uint64_t local_uid;
     size_t   tx_queue_capacity_per_iface;
 
+    const char* namespace;
+
     size_t                 topic_count;
     struct config_topic_t* topics;
 };
@@ -86,6 +89,7 @@ struct config_t load_config(const int argc, char* argv[])
         .local_node_id               = CY_NODE_ID_INVALID,
         .local_uid                   = random_uid(),
         .tx_queue_capacity_per_iface = 1000,
+        .namespace                   = NULL, // will use the default namespace by default.
         .topic_count                 = 0,
         .topics                      = calloc((size_t)(argc - 1), sizeof(struct config_topic_t)),
     };
@@ -102,6 +106,8 @@ struct config_t load_config(const int argc, char* argv[])
             cfg.local_node_id = (uint16_t)strtoul(arg.value, NULL, 0);
         } else if (arg_kv_hash("tx_queue_capacity") == arg.key_hash) {
             cfg.tx_queue_capacity_per_iface = strtoul(arg.value, NULL, 0);
+        } else if (arg_kv_hash("ns") == arg.key_hash) {
+            cfg.namespace = arg.value;
         } else if ((arg_kv_hash("pub") == arg.key_hash) || (arg_kv_hash("sub") == arg.key_hash)) {
             struct config_topic_t* topic = NULL;
             for (size_t i = 0; i < cfg.topic_count; i++) {
@@ -150,7 +156,7 @@ void on_msg_trace(struct cy_subscription_t* const subscription,
     hex[sizeof(hex) - 1] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]: %s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]:\n%s",
              cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
@@ -171,7 +177,7 @@ int main(const int argc, char* argv[])
     {
         const cy_err_t res = cy_udp_new(&cy_udp, //
                                         cfg.local_uid,
-                                        NULL,
+                                        cfg.namespace,
                                         cfg.iface_address,
                                         cfg.local_node_id,
                                         cfg.tx_queue_capacity_per_iface);
