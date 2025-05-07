@@ -205,7 +205,7 @@ int main(const int argc, char* argv[])
         }
     }
 
-    // Spin the event loop and publish on the topics.
+    // Spin the event loop and publish the topics.
     cy_us_t next_publish_at = cy_udp_now() + 1000000;
     while (true) {
         const cy_err_t err_spin = cy_udp_spin_once(&cy_udp);
@@ -215,7 +215,7 @@ int main(const int argc, char* argv[])
         }
 
         // Publish messages.
-        // I'm thinking that it would be nice to have olga_scheduler ported into C11...
+        // I'm thinking that it would be nice to have olga_scheduler ported to C11...
         // See https://github.com/Zubax/olga_scheduler
         const cy_us_t now = cy_udp_now();
         if (now >= next_publish_at) {
@@ -225,7 +225,10 @@ int main(const int argc, char* argv[])
                         continue;
                     }
                     char msg[256];
-                    sprintf(msg, "Hello from %016llx.", (unsigned long long)cy_udp.base.uid);
+                    sprintf(msg,
+                            "Hello from %016llx! The current time is %lld us.",
+                            (unsigned long long)cy_udp.base.uid,
+                            (long long)now);
                     const struct cy_payload_t payload = { .data = msg, .size = strlen(msg) };
                     const cy_err_t            pub_res = cy_udp_publish(&topics[i], now + 100000, payload);
                     if (pub_res < 0) {

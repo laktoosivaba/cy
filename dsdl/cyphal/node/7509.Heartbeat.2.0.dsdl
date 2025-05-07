@@ -7,7 +7,7 @@
 
 uint16 PUBLICATION_PERIOD_MAX_ms = 1000
 # The message shall not be published less frequently than once per second.
-# High-performance transports like Ethernet-based ones should prefer 10 Hz.
+# The preferred value is 10 Hz for all transports except CAN; for CAN prefer 2 Hz.
 
 uint16 OFFLINE_TIMEOUT_ms = 3000
 # If the last message from the node was received more than this amount of time ago, it should be considered offline.
@@ -26,7 +26,7 @@ uint16 user_word
 #
 # In the old uavcan.node.Heartbeat.1, there used to be an 8-bit vendor-specific status code here;
 # the least significant byte of the user word is interpreted by old heartbeat subscribers as the
-# vendor-specific status code, while the most significant byte is ignored.
+# vendor-specific status code, while the most significant byte is ignored by those.
 
 UID.0.1 uid
 # This 64-bit value completely and uniquely identifies the node: its vendor, product type, and specific instance.

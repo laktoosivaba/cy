@@ -10,7 +10,7 @@
 #
 # The instance-ID is used to identify a specific instance bearing the given VID and PID. In hardware nodes, this
 # could be the sequential product number, or a completely random number (as long as the possibility of collision is
-# eliminated). For software nodes, this number can be generated randomly whenever the application is started.
+# negligible). For software nodes, this number can be generated randomly whenever the application is started.
 # It is essential that this number is unique under given VID & PID.
 #
 # The values are arranged here as (IID, PID, VID) for convenience, so that when the serialized value is

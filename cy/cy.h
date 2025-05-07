@@ -28,8 +28,8 @@ extern "C"
 /// If not sure, use this value for the transfer-ID timeout.
 #define CY_TRANSFER_ID_TIMEOUT_DEFAULT_us 2000000L
 
-/// The rate at which the heartbeat topic is published is also the absolute minimum library state update interval.
-/// It is not an error to update it more often, and in fact it is desirable to reduce possible frequency aliasing.
+/// The rate at which the heartbeat topic is published is also the absolute minimum invocation interval of cy_heartbeat.
+/// It is not an error to invoke it more often, and in fact it is desirable to reduce possible frequency aliasing.
 #define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000L
 
 /// If a node-ID is provided by the user, it will be used as-is and the node will become operational immediately.
@@ -41,24 +41,19 @@ extern "C"
 /// Once a node-ID is allocated, it can be optionally saved in non-volatile memory so that the next startup is
 /// immediate, bypassing the allocation stage.
 ///
-/// If a conflict is found, the current node-ID is abandoned regardless of whether it's been given explicitly or
+/// If a conflict is found, the current node-ID is reallocated regardless of whether it's been given explicitly or
 /// allocated automatically.
 ///
 /// TODO this goes to the transport layer; see below why.
 #define CY_START_DELAY_MIN_us (CY_HEARTBEAT_PERIOD_DEFAULT_us * 5)
 #define CY_START_DELAY_MAX_us (CY_START_DELAY_MIN_us * 5)
 
-/// The range of unregulated identifiers to use for CRDT topic allocation.
-/// The range should be the same for all applications, so that they can all make deterministic and identical
-/// subject-ID allocations even when the network is partitioned. This is not strictly necessary, but it reduces the
-/// likelihood of collisions and the duration of temporary service disruptions when the network is healing after
-/// de-partitioning. The range should also be as large as possible for the same reason.
-///
-/// Fixed topics (such as the old v1 topics with manually assigned IDs) should not be allocated in the CRDT range,
-/// because old v1 nodes to not participate in the CRDT gossip, and are unable to alert the network about conflicts.
-/// This problem could be addressed by the occupancy mask, but it has downsides of its own (does not allow freeing
-/// topics, needs 768 bytes of memory), so we prefer a simpler solution of having to force static topics into the
-/// higher ID range.
+/// The range of unregulated identifiers to use for CRDT topic allocation. The range must be the same for all
+/// applications.
+/// Pinned topics (such as the ordinary topics with manually assigned IDs) can be pinned anywhere in [0, 8192);
+/// however, if they are used to communicate with old nodes that are not capable of the named topic protocol,
+/// they should be placed in [6144, 8192), because if for whatever reason only the old nodes are left using those
+/// topics, no irreparable collisions occur.
 #define CY_TOPIC_SUBJECT_COUNT 6144
 #define CY_SUBJECT_BITS        13U
 #define CY_TOTAL_SUBJECT_COUNT (1UL << CY_SUBJECT_BITS)
@@ -98,6 +93,7 @@ struct cy_tree_t
 };
 
 /// An ordinary Bloom filter with 64-bit words.
+/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 struct cy_bloom64_t
 {
     size_t    n_bits; ///< The total number of bits in the filter, a multiple of 64.
@@ -118,6 +114,7 @@ typedef cy_us_t (*cy_now_t)(struct cy_t*);
 /// This is invoked either immediately from cy_new() if an explicit node-ID is given,
 /// or after some time from cy_heartbeat() when one is allocated automatically.
 /// When this function is invoked, cy_t contains a valid node-ID.
+/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 typedef cy_err_t (*cy_transport_set_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport to abandon the current node-ID. Notice that this function is infallible.
@@ -125,6 +122,7 @@ typedef cy_err_t (*cy_transport_set_node_id_t)(struct cy_t*);
 /// If the transport does not support reconfiguration or it is deemed too complicated to support,
 /// one solution is to simply restart the node.
 /// It is recommended to purge the tx queue to avoid further collisions.
+/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 typedef void (*cy_transport_clear_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
@@ -166,19 +164,22 @@ struct cy_transport_io_t
 };
 
 /// A topic name is suffixed to the namespace name of the node that owns it, unless it begins with a `/`.
-/// The leading `~` in the name after it is concatenated is replaced with `/vvvv/pppp/iiiiiiii`,
-/// where the letters represent hexadecimal digits of the vendor ID, product ID, and instance ID of the node.
+/// The leading `~` in the name is replaced with `/vvvv/pppp/iiiiiiii`, where the letters represent hexadecimal
+/// digits of the vendor ID, product ID, and instance ID of the node.
 /// Repeated and trailing slashes are removed.
 ///
-/// CRDT merge rules:
+/// TODO: Missing feature: wildcard topic subscriptions. This requires dynamic memory, unlike the basic feature set.
+/// The consensus protocol is not affected by this feature, only the library implementation.
+///
+/// CRDT merge rules, first rule takes precedence:
 /// - on collision (same subject-ID, different hash):
-///     1. winner is pinned
-///     2. winner is older
+///     1. winner is pinned;
+///     2. winner is older;
 ///     3. winner has smaller hash.
 /// - on divergence (same hash, different subject-ID):
-///     1. winner is older
-///     2. winner has seen more defeats (i.e., larger subject-ID mod max_topics)
-/// When a topic is reallocated, it retains its current age and its defeat counter is increased.
+///     1. winner is older;
+///     2. winner has seen more defeats (i.e., larger subject-ID mod max_topics).
+/// When a topic is reallocated, it retains its current age.
 /// Conflict resolution may result in a temporary jitter if it happens to occur near log2(age) integer boundary.
 struct cy_topic_t
 {
@@ -269,6 +270,7 @@ struct cy_subscription_t
 /// There are only two functions whose invocations may result in network traffic:
 /// - cy_heartbeat() -- heartbeat only, at most one per call (for default rate see CY_HEARTBEAT_PERIOD_DEFAULT_us).
 /// - cy_publish()   -- user transfers only.
+/// Creation of a new topic may cause resubscription of any existing topics (all in the worst case).
 struct cy_t
 {
     /// The UID is actually composed of 16-bit vendor-ID, 16-bit product-ID, and 32-bit instance-ID (aka serial
@@ -289,6 +291,7 @@ struct cy_t
     /// A filter composed of 64x64-bit words can support up to 4096 auto-allocated nodes per network, which is a safe
     /// choice for most Cyphal networks.
     /// For Cyphal/CAN, a single 64-bit word is sufficient, since CAN networks with >64 nodes are exceedingly rare.
+    /// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
     struct cy_bloom64_t node_id_bloom;
 
     /// The user can use this field for arbitrary purposes.
@@ -322,20 +325,22 @@ struct cy_t
 /// autoconfiguration process, where a node will make sure to avoid conflicts at the beginning to avoid disturbing
 /// the network; the rationale is that a manually assigned node-ID takes precedence over the auto-assigned one,
 /// thus forcing any squatters out of the way.
-///
-/// The namespace may be NULL or empty, in which case it defaults to "/". It may begin with '~', which is expanded.
+/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 ///
 /// The node-ID occupancy Bloom filter is used to track the occupancy of the node-ID space. The filter must be at least
 /// a single 64-bit word long. The number of bits in the filter (64 times the word count) defines the maximum number
 /// of nodes present in the network while the local node is still guaranteed to be able to auto-configure its own ID
 /// without collisions. The recommended parameters are two 64-bit words for CAN networks (takes 16 bytes) and
 /// 64~128 words (512~1024 bytes) for all other transports.
+/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
+///
+/// The namespace may be NULL or empty, in which case it defaults to `/`. It may begin with `~`, which expands into UID.
 ///
 /// The heartbeat_topic must point to an uninitialized topic structure that will be used to publish heartbeat messages;
 /// this is the only topic that is needed by Cy itself. It will be initialized and managed automatically; if necessary,
 /// the user can add additional subscriptions to it later.
 ///
-/// No network traffic will be generated. The only function that can send heartbeat messages is cy_heartbeat().
+/// No network traffic will be generated.
 cy_err_t cy_new(struct cy_t* const             cy,
                 const uint64_t                 uid,
                 const uint16_t                 node_id,
@@ -440,7 +445,7 @@ struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* cons
 struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash);
 struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id);
 
-/// Iterate over all topics in arbitrary order.
+/// Iterate over all topics in an unspecified order.
 /// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
 /// The function does nothing if the cy or callback are NULL.
 void cy_topic_for_each(struct cy_t* const cy,

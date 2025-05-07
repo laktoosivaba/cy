@@ -54,6 +54,72 @@ static uint64_t random_uint(const uint64_t min, const uint64_t max)
     return min;
 }
 
+// ----------------------------------------  NAMES  ----------------------------------------
+
+/// Follows DDS rules for topic names.
+static bool is_identifier_char(const char c)
+{
+    return ((c >= '0') && (c <= '9')) || ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || (c == '_');
+}
+
+/// TODO this is ugly and dirty
+static bool compose_topic_name(const char* const ns,
+                               const uint64_t    uid,
+                               const char* const name,
+                               char* const       destination)
+{
+    assert(ns != NULL);
+    assert(name != NULL);
+    assert(destination != NULL);
+
+    // format the ~ user part
+    static const size_t user_len = 19;
+    char                user[user_len + 2];
+    snprintf(user,
+             sizeof(user),
+             "/%04x/%04x/%08lx/",
+             (unsigned)(uid >> 48U) & UINT16_MAX,
+             (unsigned)(uid >> 32U) & UINT16_MAX,
+             (unsigned long)(uid & UINT32_MAX));
+
+    // format a temporary representation
+    char        tmp[CY_TOPIC_NAME_MAX + 10];
+    const char* in = name;
+    if (*in != '/') {
+        const bool is_user = (*in == '~') || (*ns == '~');
+        in += *in == '~';
+        snprintf(tmp, sizeof(tmp), "/%s/%s", is_user ? user : ns, in);
+    } else {
+        snprintf(tmp, sizeof(tmp), "%s", in);
+    }
+
+    // validate and canonicalize
+    in         = tmp;
+    char  prev = '\0';
+    char* out  = destination;
+    while (*in != '\0') {
+        if ((in - tmp) > CY_TOPIC_NAME_MAX) {
+            return false;
+        }
+        const char c = *in++;
+        if (c == '/') {
+            if (prev != '/') {
+                *out++ = c;
+            }
+        } else if (is_identifier_char(c)) {
+            *out++ = c;
+        } else {
+            return 0; // invalid character
+        }
+        prev = c;
+    }
+    if (prev == '/') {
+        out--;
+    }
+    *out = '\0';
+    return true;
+}
+
 // ----------------------------------------  AVL TREE UTILITIES  ----------------------------------------
 
 static int8_t cavl_predicate_topic_hash_raw(void* const user_reference, const struct cy_tree_t* const node)
@@ -484,9 +550,12 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     struct heartbeat_t heartbeat = { 0 };
     memcpy(&heartbeat, payload.data, smaller(payload.size, sizeof(heartbeat)));
     const struct topic_gossip_t* const gossip = &heartbeat.topic_gossip;
-    // Even though we may not always deserialize the full name, we do always deserialize the name length field.
-    if ((gossip->name_length == 0) || (gossip->name[0] != '/')) {
-        return; // Not a topic.
+
+    // Identify the kind of the named resource.
+    const bool is_topic = (gossip->name_length > 0) && (gossip->name[0] == '/') &&
+                          is_identifier_char(gossip->name[gossip->name_length - 1]);
+    if (!is_topic) {
+        return;
     }
     const uint64_t other_hash    = gossip->hash;
     const uint64_t other_defeats = gossip->value[0];
@@ -569,72 +638,6 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         }
         mine->age = max_u64(mine->age, other_age);
     }
-}
-
-// ----------------------------------------  NAMES  ----------------------------------------
-
-/// Follows DDS rules for topic names.
-static bool is_identifier_char(const char c)
-{
-    return ((c >= '0') && (c <= '9')) || ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || (c == '_');
-}
-
-/// TODO this is ugly and dirty
-static bool compose_topic_name(const char* const ns,
-                               const uint64_t    uid,
-                               const char* const name,
-                               char* const       destination)
-{
-    assert(ns != NULL);
-    assert(name != NULL);
-    assert(destination != NULL);
-
-    // format the ~ user part
-    static const size_t user_len = 19;
-    char                user[user_len + 2];
-    snprintf(user,
-             sizeof(user),
-             "/%04x/%04x/%08lx/",
-             (unsigned)(uid >> 48U) & UINT16_MAX,
-             (unsigned)(uid >> 32U) & UINT16_MAX,
-             (unsigned long)(uid & UINT32_MAX));
-
-    // format a temporary representation
-    char        tmp[CY_TOPIC_NAME_MAX + 10];
-    const char* in = name;
-    if (*in != '/') {
-        const bool is_user = (*in == '~') || (*ns == '~');
-        in += *in == '~';
-        snprintf(tmp, sizeof(tmp), "/%s/%s", is_user ? user : ns, in);
-    } else {
-        snprintf(tmp, sizeof(tmp), "%s", in);
-    }
-
-    // validate and canonicalize
-    in         = tmp;
-    char  prev = '\0';
-    char* out  = destination;
-    while (*in != '\0') {
-        if ((in - tmp) > CY_TOPIC_NAME_MAX) {
-            return false;
-        }
-        const char c = *in++;
-        if (c == '/') {
-            if (prev != '/') {
-                *out++ = c;
-            }
-        } else if (is_identifier_char(c)) {
-            *out++ = c;
-        } else {
-            return 0; // invalid character
-        }
-        prev = c;
-    }
-    if (prev == '/') {
-        out--;
-    }
-    *out = '\0';
-    return true;
 }
 
 // ----------------------------------------  PUBLIC API  ----------------------------------------
