@@ -10,7 +10,7 @@ Usage:
 import sys
 import random
 import string
-import pycyphal
+from rapidhash import rapidhash
 
 ALPHABET = string.ascii_letters + string.digits + '_-'
 SUBJECT_ID_BITS = 13
@@ -25,16 +25,16 @@ def topic_hash(topic_name: str) -> int:
     else:
         if (0 <= numeric < SUBJECT_COUNT) and f"/{numeric}" == topic_name:  # Only accept canonical form.
             return numeric
-    return pycyphal.transport.commons.crc.CRC64WE.new(topic_name.encode()).value
+    return rapidhash(topic_name.encode())
 
 
-def preferred_subject_id(hash: int) -> int:
-    if hash < SUBJECT_COUNT:  # This is a pinned topic.
-        return hash
-    return hash % DYNAMIC_SUBJECT_COUNT
+def preferred_subject_id(h: int) -> int:
+    if h < SUBJECT_COUNT:  # This is a pinned topic.
+        return h
+    return h % DYNAMIC_SUBJECT_COUNT
 
 
-def find_subject_id_collision(topic_name: str, *, max_suffix_len: int) -> str:
+def find_subject_id_collision(topic_name: str, *, max_suffix_len: int) -> dict[str, int|str]:
     target_hash = topic_hash(topic_name)
     if DYNAMIC_SUBJECT_COUNT <= target_hash < SUBJECT_COUNT:
         raise ValueError(f"Topics pinned outside of the dynamic range are collision-free by design: {topic_name!r}")
@@ -44,16 +44,27 @@ def find_subject_id_collision(topic_name: str, *, max_suffix_len: int) -> str:
         suffix_len = random.randint(1, max_suffix_len)
         suffix = ''.join(random.choice(ALPHABET) for _ in range(suffix_len))
         candidate = prefix + suffix
-        if preferred_subject_id(topic_hash(candidate)) == target_subject_id:
-            return candidate
+        candidate_hash = topic_hash(candidate)
+        if preferred_subject_id(candidate_hash) == target_subject_id:
+            return {
+                "original_name": topic_name,
+                "original_hash": target_hash,
+                "collision_name": candidate,
+                "collision_hash": candidate_hash,
+            }
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(f"Usage: {sys.argv[0]} <text>")
     original = sys.argv[1]
-    twin = find_subject_id_collision(original, max_suffix_len=4)
-    print(twin)
+
+    twins = [find_subject_id_collision(original, max_suffix_len=6) for _ in range(50)]
+    twins = sorted(twins, key=lambda tw: len(tw["collision_name"]))
+
+    print(f"# \thash{' ':16s}\tname")
+    for idx, tw in enumerate(twins):
+        print(idx, f"{tw['collision_hash']:016x}", tw["collision_name"], sep="\t")
 
 
 if __name__ == "__main__":
