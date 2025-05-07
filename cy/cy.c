@@ -418,6 +418,8 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     }
 
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
+    // Note that it is possible that (hash+old_defeats)%6144 == (hash+new_defeats)%6144, which means that we
+    // stay with the same subject-ID. No special case is required for this, we handle this normally.
     topic->defeats    = new_defeats;
     size_t iter_count = 0;
     while (true) {

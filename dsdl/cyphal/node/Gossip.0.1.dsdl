@@ -5,12 +5,15 @@ uint64[3] value
 #
 # If the key name starts with a `/` and ends with `[0-9A-Za-z-_]`, it means that the key names a topic,
 # and the values contain the two logical clock values (Lamport clocks) needed for the CRDT merge operation.
+#
 #   1. The first value is the number of times the topic had to be moved due to a subject-ID collision.
 #      We call it the defeat count. The allocated subject-ID for a topic is (hash+defeats)%6144,
 #      unless it is a pinned topic, in which case the allocated subject-ID equals its hash.
-#   2. The second value is a CRDT G-counter of the number of times this topic was gossiped on the network.
-#      We call it the respect level. The respect is lost when the topic is defeated, and (by definition)
-#      it is incremented when the topic is gossiped.
+#
+#   2. The second value is an approximate logical age of the topic.
+#      The logical age increases when the topic is gossiped, and when a valid transfer is received on it.
+#      Topics with greater age win arbitration, thus ensuring stability of the network when new topics appear.
+#
 #   3. The third value is currently unused. Eventually, it may be used to report how the topic is used by the
 #      publishing node: whether the node publishes and/or subscribes to the topic, etc.
 
