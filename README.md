@@ -5,6 +5,19 @@ An experiment in robust zero-configuration pub-sub based on CRDT that works anyw
 The solution does not require special nodes (e.g., master nodes) and is fully stateless protocol-wise. Full implementation in C takes only a few hundred lines of code, does not require dynamic memory at all, and adds virtually zero error states.
 
 
+## MISSING FEATURES
+
+### RPC calls
+
+These are much easier since they require no consensus.
+To avoid data corruption on node-ID reassignment, the transfer should include either the destination UID or its hash.
+
+### Wildcard subscriptions
+
+This is not a protocol feature but a library feature, which is easy to add.
+The protocol requires no (nontrivial) changes to incorporate this.
+
+
 ## Basic principles
 
 The solution allows one to perform pub/sub on named topics (as opposed to using integer identifiers) and to obviate the need for node-ID allocation. Thanks to this, a Cyphal network can become operational from scratch without any mandatory configuration steps --- no need to assign the node-IDs, no need to use special allocator nodes, no need to configure subject-IDs. A Cyphal node will simply appear in the network and be ready to pub/sub.
