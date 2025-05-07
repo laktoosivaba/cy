@@ -25,9 +25,7 @@ uint64 key_hash
 #   canonical form, which can be seen from the pattern, meaning that for any subject-ID there is exactly one
 #   pinned topic name encoding it.
 #
-# - Otherwise, the hash is currently computed as CRC-64-WE of the key, which is bad.
-#   Later we will switch to a different hash that offers better statistical properties, perhaps rapidhash64.
-#   Obviously, all nodes shall use the same hash function applied to the canonical key.
+# - Otherwise, key_hash=rapidhash(key).
 #
 # The reason the hash is here is that its computation is expensive, and we want to avoid recomputing it for every
 # received gossip message, since there is necessarily a large number of them. We still need to transmit the full
