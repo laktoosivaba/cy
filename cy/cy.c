@@ -384,10 +384,7 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void allocate_topic(struct cy_topic_t* const topic,
-                           const uint64_t           new_defeats,
-                           const uint64_t           new_age,
-                           const bool               virgin)
+static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_defeats, const bool virgin)
 {
     struct cy_t* const cy = topic->cy;
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
@@ -420,13 +417,6 @@ static void allocate_topic(struct cy_topic_t* const topic,
         cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
 
-    // The age must be reset; part of the reason is that we're disrupting this topic anyway, so if we collide
-    // again, it is less disturbing to move this one once again instead of moving a new topic.
-    // This obviously has to be done before we attempt an insertion.
-    // Normally, topics have nonzero age, meaning that almost always we will lose arbitration to everyone and just
-    // find an empty slot.
-    topic->age = new_age;
-
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
     topic->defeats    = new_defeats;
     size_t iter_count = 0;
@@ -451,7 +441,7 @@ static void allocate_topic(struct cy_topic_t* const topic,
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
             // The age of the moving topic is being reset to zero, meaning that it will not disturb any other non-new
             // topic, which ensures that the total impact on the network is minimized.
-            allocate_topic(other, other->defeats + 1U, 0, false);
+            allocate_topic(other, other->defeats + 1U, false);
             // Remember that we're still out of tree at the moment. We pushed the other topic out of its slot,
             // but it is possible that there was a chain reaction that caused someone else to occupy this slot.
             // Since that someone else was ultimately pushed out by the topic that just lost arbitration to us,
@@ -621,7 +611,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // will also move, but the trick is that the others could have settled on different subject-IDs.
         // Everyone needs to publish their own new allocation and then we will pick max subject-ID out of that.
         if (!win) {
-            allocate_topic(mine, mine->defeats + 1U, 0, false); // age reset because we lost
+            allocate_topic(mine, mine->defeats + 1U, false); // age reset because we lost
         } else {
             schedule_gossip_asap(mine);
         }
@@ -655,7 +645,8 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
                 assert(mine_lage <= other_lage);
                 CY_TRACE(cy, "We must obey.");
                 const cy_us_t old_last_gossip = mine->last_gossip;
-                allocate_topic(mine, other_defeats, max_u64(mine->age, other_age), false);
+                mine->age                     = max_u64(mine->age, other_age);
+                allocate_topic(mine, other_defeats, false);
                 if (mine->defeats == other_defeats) { // perfect sync, no need to gossip
                     update_last_gossip_time(mine, old_last_gossip);
                 }
@@ -870,6 +861,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
     topic->hash                    = topic_hash(name);
     topic->defeats                 = 0; // starting from the preferred subject-ID.
+    topic->age                     = 0;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
@@ -900,7 +892,7 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     // meaning that another pinned topic is not occupying the same subject-ID.
     // Remember that topics arbitrate locally the same way they do externally, meaning that adding a new local topic
     // may displace another local one.
-    allocate_topic(topic, 0, 0, true);
+    allocate_topic(topic, 0, true);
 
     cy->topic_count++;
     CY_TRACE(cy,

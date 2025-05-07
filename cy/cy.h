@@ -165,6 +165,16 @@ struct cy_transport_io_t
     cy_transport_handle_resubscription_err_t handle_resubscription_err;
 };
 
+/// CRDT merge rules:
+/// - on collision (same subject-ID, different hash):
+///     1. winner is pinned
+///     2. winner is older
+///     3. winner has smaller hash.
+/// - on divergence (same hash, different subject-ID):
+///     1. winner is older
+///     2. winner has seen more defeats (i.e., larger subject-ID mod max_topics)
+/// When a topic is reallocated, it retains its current age and its defeat counter is increased.
+/// Conflict resolution may result in temporary jitter if it happens to occur near integer log2(age) boundary.
 struct cy_topic_t
 {
     struct cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
@@ -195,6 +205,9 @@ struct cy_topic_t
     /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
     uint64_t defeats;
 
+    /// The age is NOT reset when a topic loses arbitration; otherwise, it would not be able to convince other nodes
+    /// on the same topic to follow suit.
+    ///
     /// We use max(x,y) for CRDT merge, which is commutative [max(x,y)==max(y,x)], associative
     /// [max(x,max(y,z))==max(max(x,y),z)], and idempotent [max(x,x)==x], making it a valid CRDT merge operation.
     uint64_t age;
