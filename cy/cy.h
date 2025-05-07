@@ -165,6 +165,11 @@ struct cy_transport_io_t
     cy_transport_handle_resubscription_err_t handle_resubscription_err;
 };
 
+/// A topic name is suffixed to the namespace name of the node that owns it, unless it begins with a `/`.
+/// The leading `~` in the name after it is concatenated is replaced with `/vvvv/pppp/iiiiiiii`,
+/// where the letters represent hexadecimal digits of the vendor ID, product ID, and instance ID of the node.
+/// Repeated and trailing slashes are removed.
+///
 /// CRDT merge rules:
 /// - on collision (same subject-ID, different hash):
 ///     1. winner is pinned
@@ -318,7 +323,7 @@ struct cy_t
 /// the network; the rationale is that a manually assigned node-ID takes precedence over the auto-assigned one,
 /// thus forcing any squatters out of the way.
 ///
-/// The namespace may be NULL or empty, in which case it defaults to "~".
+/// The namespace may be NULL or empty, in which case it defaults to "/". It may begin with '~', which is expanded.
 ///
 /// The node-ID occupancy Bloom filter is used to track the occupancy of the node-ID space. The filter must be at least
 /// a single 64-bit word long. The number of bits in the filter (64 times the word count) defines the maximum number
@@ -494,11 +499,6 @@ void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t
 /// If the local node-ID is not allocated, the function may fail depending on the capabilities of the transport library;
 /// to avoid this, it is possible to check cy_has_node_id() before calling this function.
 cy_err_t cy_publish(struct cy_topic_t* const topic, const cy_us_t tx_deadline, const struct cy_payload_t payload);
-
-/// Make topic name canonical. The output buffer shall be at least CY_TOPIC_NAME_MAX + 1 bytes long.
-/// Returns positive length on success, zero if the name is not valid.
-/// Example: "/foo//bar/" -> "/foo/bar"
-size_t cy_canonicalize_topic(const char* const in, char* const out);
 
 /// For diagnostics and logging only. Do not use in embedded and real-time applications.
 /// This function is only required if CY_CONFIG_TRACE is defined and is nonzero; otherwise it should be left undefined.

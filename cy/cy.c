@@ -6,6 +6,8 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdio.h> ///< TODO remove dependency on stdio.h!
+#include <ctype.h>
 
 // #define HEARTBEAT_TOPIC_NAME     "/7509"
 #define HEARTBEAT_TOPIC_NAME     "/8191" // TODO FIXME XXX THIS IS ONLY FOR TESTING; the correct name is "/7509"
@@ -569,6 +571,72 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     }
 }
 
+// ----------------------------------------  NAMES  ----------------------------------------
+
+/// Follows DDS rules for topic names.
+static bool is_identifier_char(const char c)
+{
+    return ((c >= '0') && (c <= '9')) || ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || (c == '_');
+}
+
+/// TODO this is ugly and dirty
+static bool compose_topic_name(const char* const ns,
+                               const uint64_t    uid,
+                               const char* const name,
+                               char* const       destination)
+{
+    assert(ns != NULL);
+    assert(name != NULL);
+    assert(destination != NULL);
+
+    // format the ~ user part
+    static const size_t user_len = 19;
+    char                user[user_len + 2];
+    snprintf(user,
+             sizeof(user),
+             "/%04x/%04x/%08lx/",
+             (unsigned)(uid >> 48U) & UINT16_MAX,
+             (unsigned)(uid >> 32U) & UINT16_MAX,
+             (unsigned long)(uid & UINT32_MAX));
+
+    // format a temporary representation
+    char        tmp[CY_TOPIC_NAME_MAX + 10];
+    const char* in = name;
+    if (*in != '/') {
+        const bool is_user = (*in == '~') || (*ns == '~');
+        in += *in == '~';
+        snprintf(tmp, sizeof(tmp), "/%s/%s", is_user ? user : ns, in);
+    } else {
+        snprintf(tmp, sizeof(tmp), "%s", in);
+    }
+
+    // validate and canonicalize
+    in         = tmp;
+    char  prev = '\0';
+    char* out  = destination;
+    while (*in != '\0') {
+        if ((in - tmp) > CY_TOPIC_NAME_MAX) {
+            return false;
+        }
+        const char c = *in++;
+        if (c == '/') {
+            if (prev != '/') {
+                *out++ = c;
+            }
+        } else if (is_identifier_char(c)) {
+            *out++ = c;
+        } else {
+            return 0; // invalid character
+        }
+        prev = c;
+    }
+    if (prev == '/') {
+        out--;
+    }
+    *out = '\0';
+    return true;
+}
+
 // ----------------------------------------  PUBLIC API  ----------------------------------------
 
 cy_err_t cy_new(struct cy_t* const             cy,
@@ -595,13 +663,20 @@ cy_err_t cy_new(struct cy_t* const             cy,
     cy->node_id     = (node_id <= node_id_max) ? node_id : CY_NODE_ID_INVALID;
     cy->node_id_max = node_id_max;
 
-    cy->namespace_length = (namespace_ == NULL) ? 0 : smaller(strlen(namespace_), CY_NAMESPACE_NAME_MAX);
-    if (cy->namespace_length > 0) {
-        memcpy(cy->namespace_, namespace_, cy->namespace_length);
-        cy->namespace_[CY_NAMESPACE_NAME_MAX] = '\0';
+    if (namespace_ != NULL) {
+        const char* in = namespace_;
+        size_t      i  = 0; // hack for now: just replace invalid characters
+        for (; i < CY_NAMESPACE_NAME_MAX; i++) {
+            const char c = *in++;
+            if (is_identifier_char(c) || (c == '/') || ((c == '~') && (i == 0))) {
+                cy->namespace_[i] = c;
+            }
+        }
+        cy->namespace_length = i;
+        cy->namespace_[i]    = '\0';
     } else {
         cy->namespace_length = 1;
-        cy->namespace_[0]    = '~';
+        cy->namespace_[0]    = '/'; // default namespace
         cy->namespace_[1]    = '\0';
     }
     cy->user                  = NULL;
@@ -773,15 +848,15 @@ bool cy_topic_new(struct cy_t* const                  cy,
     memset(topic, 0, sizeof(*topic));
     topic->cy = cy;
 
-    // TODO: prefix the namespace unless the topic name starts with "/".
-    // TODO: expand ~ to "/vvvv/pppp/iiiiiiii/"
-    // TODO: canonicalize the topic name (repeated/trailing slash, strip whitespace, etc.).
-    topic->name_length = strlen(name);
-    memcpy(topic->name, name, smaller(topic->name_length, CY_TOPIC_NAME_MAX));
+    if (!compose_topic_name(cy->namespace_, cy->uid, name, topic->name)) {
+        goto hell;
+    }
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
-    topic->hash                    = topic_hash(strlen(name), name);
-    topic->defeats                 = 0; // starting from the preferred subject-ID.
-    topic->age                     = 0;
+    topic->name_length             = strlen(topic->name);
+
+    topic->hash    = topic_hash(topic->name_length, topic->name);
+    topic->defeats = 0; // starting from the preferred subject-ID.
+    topic->age     = 0;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
