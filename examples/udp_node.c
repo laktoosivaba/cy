@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 
 static uint64_t random_uid(void)
 {
@@ -154,9 +155,16 @@ void on_msg_trace(struct cy_subscription_t* const subscription,
         sprintf(hex + i * 2, "%02x", ((const uint8_t*)payload.data)[i]);
     }
     hex[sizeof(hex) - 1] = '\0';
+    // Convert payload to ASCII.
+    char ascii[payload.size + 1];
+    for (size_t i = 0; i < payload.size; i++) {
+        const char ch = ((const char*)payload.data)[i];
+        ascii[i]      = isprint(ch) ? ch : '.';
+    }
+    ascii[payload.size] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]:\n%s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]:\n%s\n%s",
              cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
@@ -164,7 +172,8 @@ void on_msg_trace(struct cy_subscription_t* const subscription,
              (unsigned long long)timestamp_us,
              subscription->topic->name,
              (unsigned long long)subscription->topic->age,
-             hex);
+             hex,
+             ascii);
 }
 
 int main(const int argc, char* argv[])

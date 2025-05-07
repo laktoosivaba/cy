@@ -7,10 +7,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h> ///< TODO remove dependency on stdio.h!
-#include <ctype.h>
 
-// #define HEARTBEAT_TOPIC_NAME     "/7509"
-#define HEARTBEAT_TOPIC_NAME     "/8191" // TODO FIXME XXX THIS IS ONLY FOR TESTING; the correct name is "/7509"
 #define HEARTBEAT_PUB_TIMEOUT_us 1000000L
 
 static size_t smaller(const size_t a, const size_t b)
@@ -353,7 +350,11 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats
     if (is_pinned(hash)) {
         return (uint16_t)hash; // Pinned topics may exceed CY_TOPIC_SUBJECT_COUNT.
     }
+#ifndef CY_CONFIG_PREFERRED_TOPIC_OVERRIDE
     return (uint16_t)((hash + defeats) % CY_TOPIC_SUBJECT_COUNT);
+#else
+    return (uint16_t)((CY_CONFIG_PREFERRED_TOPIC_OVERRIDE + defeats) % CY_TOPIC_SUBJECT_COUNT);
+#endif
 }
 
 /// This function will schedule all affected topics for gossip, including the one that is being moved.
@@ -714,7 +715,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
 
     // Register the heartbeat topic and subscribe to it.
     if (res >= 0) {
-        const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME, NULL);
+        const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, CY_CONFIG_HEARTBEAT_TOPIC_NAME, NULL);
         assert(topic_ok);
         res = cy_subscribe(cy->heartbeat_topic,
                            &cy->heartbeat_sub,

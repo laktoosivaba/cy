@@ -6,9 +6,33 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// ========================================  BUILD TIME CONFIG OPTIONS  ========================================
+
+/// Only for testing and debugging purposes.
+/// All nodes obviously must use the same heartbeat topic, which is why it is pinned.
+#ifndef CY_CONFIG_HEARTBEAT_TOPIC_NAME
+#define CY_CONFIG_HEARTBEAT_TOPIC_NAME "/7509"
+#endif
+
+/// Only for testing and debugging purposes.
+/// Makes all non-pinned topics prefer the same subject-ID that equals the value of this macro,
+/// which maximizes topic allocation collisions. Pinned topics are unaffected.
+/// This can be used to stress-test the consensus algorithm.
+#ifndef CY_CONFIG_PREFERRED_TOPIC_OVERRIDE
+// Not defined by default; the normal subject expression is used instead: subject_id=(hash+defeats)%6144
+#endif
+
+/// If CY_CONFIG_TRACE is defined and is non-zero, cy_trace() shall be defined externally.
 #ifndef CY_CONFIG_TRACE
 #define CY_CONFIG_TRACE 0
 #endif
+#if CY_CONFIG_TRACE
+#define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#else
+#define CY_TRACE(cy, ...) (void)0
+#endif
+
+// =============================================================================================================
 
 #ifdef __cplusplus
 extern "C"
@@ -518,14 +542,6 @@ extern void cy_trace(struct cy_t* const  cy,
   __attribute__((__format__(__printf__, 5, 6)))
 #endif
   ;
-
-/// This convenience macro is defined in the header file to enable reuse in other modules.
-/// The newline at the end is not included in the format string.
-#if CY_CONFIG_TRACE
-#define CY_TRACE(cy, ...) cy_trace(cy, __FILE__, __LINE__, __func__, __VA_ARGS__)
-#else
-#define CY_TRACE(cy, ...) (void)0
-#endif
 
 #ifdef __cplusplus
 }
