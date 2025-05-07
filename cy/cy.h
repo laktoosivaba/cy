@@ -195,32 +195,9 @@ struct cy_topic_t
     /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
     uint64_t defeats;
 
-    /// Estimate of the time when this topic has first appeared on the network.
-    /// This is computed as a CRDT min() merge across all nodes.
-    /// It is used in subject-ID conflict resolution to determine which topic should be moved;
-    /// the one with the greater inception time (lower age) has to move.
-    ///
-    /// This is designed to avoid disturbing the network when a new topic is introduced,
-    /// forcing new topics to adapt to the network rather than the other way around.
-    ///
-    /// The inception is not communicated directly because we do not require all nodes to have synchronized time.
-    /// Instead, we publish the age of the topic, which is the difference between the current time and the inception
-    /// computed locally before publication:
-    ///     age = now_a - inception_a
-    /// where now_a is the local time on node A. When a remote node B receives the age, it obtains its own inception
-    /// estimate in its local time system:
-    ///     inception_b = now_b + t_prop - age
-    /// where t_prop is the network propagation delay. Let delta = now_a - now_b, then:
-    ///     inception_b = now_a - delta + t_prop - age
-    /// Express in the original time system:
-    ///     inception_a = now_a + t_prop - age
-    /// Meaning that by the arrival to a remote node, the inception estimate is increased by t_prop.
-    /// Then, the CRDT merge computes the new local replica of the inception time:
-    ///     inception = min(inception_local, inception_remote)
-    /// The resulting behavior is that the inception estimate will reach a stable state defined by the worst seen
-    /// network propagation delay. This is desirable because for a CRDT to reach eventual consistency, the state
-    /// should remain quiescent for a while.
-    cy_us_t inception;
+    /// We use max(x,y) for CRDT merge, which is commutative [max(x,y)==max(y,x)], associative
+    /// [max(x,max(y,z))==max(max(x,y),z)], and idempotent [max(x,x)==x], making it a valid CRDT merge operation.
+    uint64_t age;
 
     /// Updated whenever the topic is gossiped.
     ///
@@ -230,7 +207,7 @@ struct cy_topic_t
     /// This could occur in packet switched networks or if redundant interfaces are used. Such coordinated publishing
     /// can naturally settle on a stable state where some nodes become responsible for publishing specific topics,
     /// and nodes that happen to be in a different partition will never see those topics.
-    cy_us_t last_gossip_us;
+    cy_us_t last_gossip;
 
     /// The user can use this field for arbitrary purposes.
     void* user;
@@ -242,7 +219,7 @@ struct cy_topic_t
 
     /// Only used if the application subscribes on this topic.
     struct cy_subscription_t* sub_list;
-    cy_us_t                   sub_transfer_id_timeout_us;
+    cy_us_t                   sub_transfer_id_timeout;
     size_t                    sub_extent;
     bool                      subscribed; ///< May be false even if sub_list is nonempty on resubscription error.
 };
@@ -250,7 +227,7 @@ struct cy_topic_t
 /// Cy will free the payload buffer afterward. The application cannot keep it beyond the callback because the memory
 /// could be allocated from the NIC buffers etc.
 typedef void (*cy_subscription_callback_t)(struct cy_subscription_t* subscription,
-                                           cy_us_t                   timestamp_us,
+                                           cy_us_t                   timestamp,
                                            struct cy_transfer_meta_t metadata,
                                            struct cy_payload_t       payload);
 struct cy_subscription_t
@@ -272,7 +249,7 @@ struct cy_t
     /// Zero is not a valid UID.
     uint64_t uid;
 
-    cy_us_t started_at_us;
+    cy_us_t started_at;
 
     uint16_t node_id;
     uint16_t node_id_max; ///< Depends on the transport layer.
@@ -299,8 +276,8 @@ struct cy_t
     /// Heartbeat topic and related items.
     struct cy_topic_t*       heartbeat_topic;
     struct cy_subscription_t heartbeat_sub;
-    cy_us_t                  heartbeat_next_us;
-    cy_us_t                  heartbeat_period_us; ///< Can be adjusted by the user. Prefer larger period on CAN.
+    cy_us_t                  heartbeat_next;
+    cy_us_t                  heartbeat_period; ///< Can be adjusted by the user. Prefer larger period on CAN.
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;
@@ -350,7 +327,7 @@ void     cy_destroy(struct cy_t* const cy);
 /// If this is invoked together with cy_heartbeat(), then cy_ingest() must be invoked BEFORE cy_heartbeat()
 /// to ensure that the latest state updates are reflected in the next heartbeat message.
 void cy_ingest(struct cy_topic_t* const        topic,
-               const cy_us_t                   timestamp_us,
+               const cy_us_t                   timestamp,
                const struct cy_transfer_meta_t metadata,
                const struct cy_payload_t       payload);
 
@@ -473,7 +450,7 @@ static inline uint64_t cy_topic_get_discriminator(const struct cy_topic_t* const
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
                       struct cy_subscription_t* const  sub,
                       const size_t                     extent,
-                      const cy_us_t                    transfer_id_timeout_us,
+                      const cy_us_t                    transfer_id_timeout,
                       const cy_subscription_callback_t callback);
 void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t* const sub);
 
@@ -482,7 +459,7 @@ void     cy_unsubscribe(struct cy_topic_t* const topic, struct cy_subscription_t
 /// This function always publishes only one transfer as requested; no auxiliary traffic is generated.
 /// If the local node-ID is not allocated, the function may fail depending on the capabilities of the transport library;
 /// to avoid this, it is possible to check cy_has_node_id() before calling this function.
-cy_err_t cy_publish(struct cy_topic_t* const topic, const cy_us_t tx_deadline_us, const struct cy_payload_t payload);
+cy_err_t cy_publish(struct cy_topic_t* const topic, const cy_us_t tx_deadline, const struct cy_payload_t payload);
 
 /// Make topic name canonical. The output buffer shall be at least CY_TOPIC_NAME_MAX + 1 bytes long.
 /// Returns positive length on success, zero if the name is not valid.

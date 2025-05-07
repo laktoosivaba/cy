@@ -150,14 +150,14 @@ void on_msg_trace(struct cy_subscription_t* const subscription,
     hex[sizeof(hex) - 1] = '\0';
     // Log the message.
     CY_TRACE(subscription->topic->cy,
-             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [inception=%lld]: %s",
+             "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]: %s",
              cy_topic_get_subject_id(subscription->topic),
              metadata.remote_node_id,
              (unsigned long long)metadata.transfer_id,
              payload.size,
              (unsigned long long)timestamp_us,
              subscription->topic->name,
-             (long long)subscription->topic->inception,
+             (unsigned long long)subscription->topic->age,
              hex);
 }
 
@@ -200,7 +200,7 @@ int main(const int argc, char* argv[])
     }
 
     // Spin the event loop and publish on the topics.
-    cy_us_t next_publish_at = cy_udp_now_us() + 1000000;
+    cy_us_t next_publish_at = cy_udp_now() + 1000000;
     while (true) {
         const cy_err_t err_spin = cy_udp_spin_once(&cy_udp);
         if (err_spin < 0) {
@@ -211,7 +211,7 @@ int main(const int argc, char* argv[])
         // Publish messages.
         // I'm thinking that it would be nice to have olga_scheduler ported into C11...
         // See https://github.com/Zubax/olga_scheduler
-        const cy_us_t now = cy_udp_now_us();
+        const cy_us_t now = cy_udp_now();
         if (now >= next_publish_at) {
             if (cy_has_node_id(&cy_udp.base)) {
                 for (size_t i = 0; i < cfg.topic_count; i++) {
@@ -243,7 +243,7 @@ void cy_trace(struct cy_t* const  cy,
               ...)
 {
     // Capture the uptime timestamp ASAP.
-    const cy_us_t uptime_us = cy->now(cy) - cy->started_at_us;
+    const cy_us_t uptime_us = cy->now(cy) - cy->started_at;
 
     // Get the current wall time and format it.
     struct timespec ts;
