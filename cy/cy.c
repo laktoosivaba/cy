@@ -281,18 +281,19 @@ static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t no
 
 // ----------------------------------------  TOPIC OPS  ----------------------------------------
 
+/// Pinned topic names are canonical, which ensures that one pinned topic cannot collide with another.
 static bool is_pinned(const uint64_t hash)
 {
     return hash < CY_TOTAL_SUBJECT_COUNT;
 }
 
 /// This comparator is only applicable on subject-ID allocation conflicts. As such, hashes must be different.
-/// Pinned topics always win regardless. Pinned topic names are canonical, which ensures that one pinned topic
-/// cannot collide with another.
 static bool left_wins(const struct cy_topic_t* const left, const uint64_t r_age, const uint64_t r_hash)
 {
     assert(left->hash != r_hash);
     if (is_pinned(left->hash) != is_pinned(r_hash)) {
+        // We could replace this special case with an age advantage for pinned topics, but then we're reducing the
+        // effective range of the age by a factor of 2^32, which risks overflow.
         return is_pinned(left->hash);
     }
     const int_fast8_t l_lage = log2_floor(left->age);
@@ -725,7 +726,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
 
     // Register the heartbeat topic and subscribe to it.
     if (res >= 0) {
-        const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME);
+        const bool topic_ok = cy_topic_new(cy, cy->heartbeat_topic, HEARTBEAT_TOPIC_NAME, NULL);
         assert(topic_ok);
         res = cy_subscribe(cy->heartbeat_topic,
                            &cy->heartbeat_sub,
@@ -851,7 +852,10 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
     cy->transport.clear_node_id(cy);
 }
 
-bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name)
+bool cy_topic_new(struct cy_t* const                  cy,
+                  struct cy_topic_t* const            topic,
+                  const char* const                   name,
+                  const struct cy_topic_hint_t* const optional_hint)
 {
     assert(cy != NULL);
     assert(topic != NULL);
@@ -878,6 +882,17 @@ bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const c
     if ((topic->name_length == 0) || (topic->name_length > CY_TOPIC_NAME_MAX) || (topic->name[0] != '/') ||
         (cy->topic_count >= CY_TOPIC_SUBJECT_COUNT)) {
         goto hell;
+    }
+
+    // Apply the hints from the user to achieve the desired initial state.
+    if (optional_hint != NULL) {
+        if (!is_pinned(topic->hash)) {
+            // Fit the lowest defeats counter such that we land at the specified subject-ID.
+            // Avoid negative remainders, so we don't use simple defeats=(subject_id-hash)%6144.
+            while (topic_get_subject_id(topic->hash, topic->defeats) != optional_hint->subject_id) {
+                topic->defeats++;
+            }
+        }
     }
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.

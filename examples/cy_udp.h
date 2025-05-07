@@ -81,7 +81,10 @@ cy_err_t cy_udp_spin_once(struct cy_udp_t* const cy_udp);
 /// The current monotonic time is as defined in cy_udp_now().
 cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline);
 
-bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* const topic, const char* const name);
+bool cy_udp_topic_new(struct cy_udp_t* const              cy_udp,
+                      struct cy_udp_topic_t* const        topic,
+                      const char* const                   name,
+                      const struct cy_topic_hint_t* const optional_hints);
 
 /// Trivial convenience wrapper over cy_subscribe().
 static inline cy_err_t cy_udp_subscribe(struct cy_udp_topic_t* const     topic,

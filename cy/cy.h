@@ -411,12 +411,23 @@ static inline bool cy_has_node_id(const struct cy_t* const cy)
     return cy->node_id <= cy->node_id_max;
 }
 
+/// If the hint is provided, it will be used as the initial allocation state, unless either a conflict or divergence
+/// are discovered, which will be treated normally, without any preference to the hint. This option allows the user
+/// to optionally save the network configuration in a non-volatile storage, such that the next time the network becomes
+/// operational immediately, without waiting for the CRDT consensus. Remember that the hint is discarded on conflict.
+struct cy_topic_hint_t
+{
+    uint16_t subject_id; ///< This hint is ignored for pined topics.
+};
+
 /// Register a new topic that may be used by the local application for publishing, subscribing, or both.
 /// Returns falsity if the topic name is not unique or not valid.
-/// Pinned topics should not use subject-IDs below CY_ALLOC_SUBJECT_COUNT because the network may have to move them.
+///
 /// No network traffic is generated here.
-/// TODO: provide an option to restore a known subject-ID; e.g., loaded from non-volatile memory, to skip allocation.
-bool cy_topic_new(struct cy_t* const cy, struct cy_topic_t* const topic, const char* const name);
+bool cy_topic_new(struct cy_t* const                  cy,
+                  struct cy_topic_t* const            topic,
+                  const char* const                   name,
+                  const struct cy_topic_hint_t* const optional_hint);
 void cy_topic_destroy(struct cy_topic_t* const topic);
 
 /// Complexity is logarithmic in the number of topics. NULL if not found.

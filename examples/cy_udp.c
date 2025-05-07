@@ -497,12 +497,15 @@ cy_err_t cy_udp_spin_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline
     return res;
 }
 
-bool cy_udp_topic_new(struct cy_udp_t* const cy_udp, struct cy_udp_topic_t* const topic, const char* const name)
+bool cy_udp_topic_new(struct cy_udp_t* const              cy_udp,
+                      struct cy_udp_topic_t* const        topic,
+                      const char* const                   name,
+                      const struct cy_topic_hint_t* const optional_hints)
 {
     assert(cy_udp != NULL);
     assert(topic != NULL);
     assert(name != NULL);
     memset(topic, 0, sizeof(*topic));
     topic->rx_sock_err_handler = default_rx_sock_err_handler;
-    return cy_topic_new(&cy_udp->base, &topic->base, name);
+    return cy_topic_new(&cy_udp->base, &topic->base, name, optional_hints);
 }

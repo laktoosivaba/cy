@@ -185,7 +185,7 @@ int main(const int argc, char* argv[])
     struct cy_udp_topic_t*    topics = calloc(cfg.topic_count, sizeof(struct cy_udp_topic_t));
     struct cy_subscription_t* subs   = calloc(cfg.topic_count, sizeof(struct cy_subscription_t));
     for (size_t i = 0; i < cfg.topic_count; i++) {
-        cy_err_t res = cy_udp_topic_new(&cy_udp, &topics[i], cfg.topics[i].name);
+        cy_err_t res = cy_udp_topic_new(&cy_udp, &topics[i], cfg.topics[i].name, NULL);
         if (res < 0) {
             fprintf(stderr, "cy_udp_topic_new: %d\n", res);
             return 1;
