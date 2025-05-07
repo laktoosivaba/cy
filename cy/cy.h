@@ -174,7 +174,7 @@ struct cy_transport_io_t
 ///     1. winner is older
 ///     2. winner has seen more defeats (i.e., larger subject-ID mod max_topics)
 /// When a topic is reallocated, it retains its current age and its defeat counter is increased.
-/// Conflict resolution may result in temporary jitter if it happens to occur near integer log2(age) boundary.
+/// Conflict resolution may result in a temporary jitter if it happens to occur near log2(age) integer boundary.
 struct cy_topic_t
 {
     struct cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
@@ -198,18 +198,28 @@ struct cy_topic_t
 
     /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
     /// defeat counter incremented. The defeat counter is used as a Lamport clock counting the loss events.
-    /// Higher Lamport clock (defeat counter) wins because it implies that any lower value is non-viable since
-    /// it has been known to cause at least one collision anywhere on the network.
-    /// The counter MUST NOT BE CHANGED without removing the topic from the subject-ID index tree!
-    /// When a topic is defeated, it loses its respect and has to re-earn it from zero.
+    /// Higher clock wins because it implies that any lower value is non-viable since it has been known to cause
+    /// at least one collision anywhere on the network. The counter MUST NOT BE CHANGED without removing the topic
+    /// from the subject-ID index tree!
     /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
     uint64_t defeats;
 
+    /// Currently, the age is increased when:
+    ///
+    /// 1. The topic is gossiped, but not more often than once per second.
+    ///
+    /// 2. Experimental and optional: A transfer is received on the topic.
+    ///    Not transmitted, though, to prevent unconnected publishers from inflating their own age.
+    ///    Subscription-driven ageing is a robust choice because it implies that the topic is actually used.
+    ///    All nodes except the publishers will locally adjust the age; the publisher will eventually learn
+    ///    that during CRDT merge. If the publisher loses allocation in the meantime, its subscribers will prevent
+    ///    it from losing their allocation and force it to move back in eventually.
+    ///
     /// The age is NOT reset when a topic loses arbitration; otherwise, it would not be able to convince other nodes
     /// on the same topic to follow suit.
     ///
     /// We use max(x,y) for CRDT merge, which is commutative [max(x,y)==max(y,x)], associative
-    /// [max(x,max(y,z))==max(max(x,y),z)], and idempotent [max(x,x)==x], making it a valid CRDT merge operation.
+    /// [max(x,max(y,z))==max(max(x,y),z)], and idempotent [max(x,x)==x], making it a valid merge operation.
     uint64_t age;
 
     /// Updated whenever the topic is gossiped.

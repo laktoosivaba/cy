@@ -611,7 +611,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // will also move, but the trick is that the others could have settled on different subject-IDs.
         // Everyone needs to publish their own new allocation and then we will pick max subject-ID out of that.
         if (!win) {
-            allocate_topic(mine, mine->defeats + 1U, false); // age reset because we lost
+            allocate_topic(mine, mine->defeats + 1U, false);
         } else {
             schedule_gossip_asap(mine);
         }
@@ -638,12 +638,12 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
                      other_lage);
             assert(mine->defeats != other_defeats);
             if ((mine_lage > other_lage) || ((mine_lage == other_lage) && (mine->defeats > other_defeats))) {
-                CY_TRACE(cy, "Remote party must obey.");
+                CY_TRACE(cy, "We won, existing allocation not altered; expecting remote to adjust.");
                 schedule_gossip_asap(mine);
             } else {
                 assert((mine_lage <= other_lage) && ((mine_lage < other_lage) || (mine->defeats < other_defeats)));
                 assert(mine_lage <= other_lage);
-                CY_TRACE(cy, "We must obey.");
+                CY_TRACE(cy, "We lost, reallocating the topic to try and match the remote, or offer new alternative.");
                 const cy_us_t old_last_gossip = mine->last_gossip;
                 mine->age                     = max_u64(mine->age, other_age);
                 allocate_topic(mine, other_defeats, false);
@@ -759,6 +759,10 @@ void cy_ingest(struct cy_topic_t* const        topic,
                  popcount_all(cy->node_id_bloom.n_bits, cy->node_id_bloom.storage) + 1U);
     }
     bloom64_set(&cy->node_id_bloom, metadata.remote_node_id);
+
+    // Experimental: age the topic with received transfers. Not with the published ones because we don't want
+    // unconnected publishers to inflate the age.
+    topic->age++;
 
     // Simply invoke all callbacks in the subscription list.
     struct cy_subscription_t* sub = topic->sub_list;
