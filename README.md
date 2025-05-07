@@ -1,8 +1,15 @@
-# Robust zero-configuration decentralized (brokerless) Cyphal with named topics
+# Experimental robust zero-configuration decentralized (brokerless) Cyphal with named topics
 
-An experiment in robust zero-configuration pub-sub based on CRDT that works anywhere. The design favors availability and guarantees eventual consistency. Brief periods of degraded service are possible when new nodes or new topics are introduced into the network. A fully settled network is guaranteed to function deterministically just like a statically configured one; however, the initial settling process is stochastic in its nature. A found steady configuration can be stored to allow instant deterministic state recovery at every boot, while this state does not have to be pre-configured manually like in the original design.
+A minimalist Cyphal extension adding named topics that are automatically allocated in the subject-ID space without a central coordinator. A simple decentralized node-ID autoconfiguration protocol is added as well.
 
-The solution does not require special nodes (e.g., master nodes) and is fully stateless protocol-wise. Full implementation in C takes only a few hundred lines of code, does not require dynamic memory at all, and adds virtually zero error states.
+The basic requirements are as follows:
+
+- Discriminate data flows by descriptive string names instead of integer subject-IDs.
+- Allow nodes to join the network with zero prior configuration of the protocol (at least above the physical layer).
+- Introduction of new topics and/or nodes must not disturb operation of the existing participants.
+- The autoconfiguration protocol must be stateless.
+- Retain backward compatibility with old Cyphal nodes that do not support named topics.
+- The solution should be implementable in under 1k lines of C without dynamic memory or undue computing costs for small nodes.
 
 
 ## Heartbeat extension
@@ -12,21 +19,25 @@ The heartbeat message is redefined to add new topic metadata while retaining wir
 ```python
 # 7509.cyphal.node.Heartbeat.2
 uint32    uptime          # [second] like in Heartbeat v1
-void16                    # Used to be health and mode; now always parses as health=nominal, mode=operational
+void16                    # Used to be health and mode; now parses as health=nominal, mode=operational
 uint16    user_word       # Used to be vendor-specific status code
 UID.0.1   uid             # New field: 64-bit unique node ID
 @assert _offset_ == {128}
 Gossip.0.1 gossip         # CRDT gossip data
+@assert _offset_.max == 144 * 8
 @sealed
 ```
 
 ```python
 # Gossip
 uint64[3] value
-uint64    key_hash
+uint64    key_hash        # Because it is expensive to compute
 uint8 KEY_CAPACITY = 95
 utf8[<=KEY_CAPACITY] key
+@assert _offset_.max == 128 * 8
+@sealed
 ```
+
 
 ## Rules
 
