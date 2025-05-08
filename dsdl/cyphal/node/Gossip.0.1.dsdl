@@ -6,7 +6,7 @@ uint64[3] value
 # If the key name starts with a `/` and ends with `[0-9A-Za-z_]`, it means that the key names a topic; the values are:
 #
 #   1. The first value is the number of times the topic had to be moved due to subject-ID collisions.
-#      We call it the defeat count. The allocated subject-ID for a topic is (hash+defeats)%6144,
+#      We call it the eviction count. The allocated subject-ID for a topic is (hash+evictions)%6144,
 #      unless it is a pinned topic, in which case the allocated subject-ID equals its hash.
 #
 #   2. The second value is an approximate logical age of the topic.

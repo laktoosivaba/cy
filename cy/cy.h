@@ -19,7 +19,7 @@
 /// which maximizes topic allocation collisions. Pinned topics are unaffected.
 /// This can be used to stress-test the consensus algorithm.
 #ifndef CY_CONFIG_PREFERRED_TOPIC_OVERRIDE
-// Not defined by default; the normal subject expression is used instead: subject_id=(hash+defeats)%6144
+// Not defined by default; the normal subject expression is used instead: subject_id=(hash+evictions)%6144
 #endif
 
 /// If CY_CONFIG_TRACE is defined and is non-zero, cy_trace() shall be defined externally.
@@ -198,7 +198,7 @@ struct cy_transport_io_t
 ///     3. winner has smaller hash.
 /// - on divergence (same hash, different subject-ID):
 ///     1. winner is older;
-///     2. winner has seen more defeats (i.e., larger subject-ID mod max_topics).
+///     2. winner has seen more evictions (i.e., larger subject-ID mod max_topics).
 /// When a topic is reallocated, it retains its current age.
 /// Conflict resolution may result in a temporary jitter if it happens to occur near log2(age) integer boundary.
 struct cy_topic_t
@@ -223,12 +223,12 @@ struct cy_topic_t
     uint64_t hash;
 
     /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
-    /// defeat counter incremented. The defeat counter is used as a Lamport clock counting the loss events.
+    /// eviction counter incremented. The eviction counter is used as a Lamport clock counting the loss events.
     /// Higher clock wins because it implies that any lower value is non-viable since it has been known to cause
     /// at least one collision anywhere on the network. The counter MUST NOT BE CHANGED without removing the topic
     /// from the subject-ID index tree!
-    /// Remember that the subject-ID is (for non-pinned topics): (hash+defeats)%topic_count.
-    uint64_t defeats;
+    /// Remember that the subject-ID is (for non-pinned topics): (hash+evictions)%topic_count.
+    uint64_t evictions;
 
     /// Currently, the age is increased when:
     ///

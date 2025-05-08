@@ -353,15 +353,15 @@ static uint64_t topic_hash(const size_t name_length, const char* const name)
     return hash;
 }
 
-static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats)
+static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t evictions)
 {
     if (is_pinned(hash)) {
         return (uint16_t)hash; // Pinned topics may exceed CY_TOPIC_SUBJECT_COUNT.
     }
 #ifndef CY_CONFIG_PREFERRED_TOPIC_OVERRIDE
-    return (uint16_t)((hash + defeats) % CY_TOPIC_SUBJECT_COUNT);
+    return (uint16_t)((hash + evictions) % CY_TOPIC_SUBJECT_COUNT);
 #else
-    return (uint16_t)((CY_CONFIG_PREFERRED_TOPIC_OVERRIDE + defeats) % CY_TOPIC_SUBJECT_COUNT);
+    return (uint16_t)((CY_CONFIG_PREFERRED_TOPIC_OVERRIDE + evictions) % CY_TOPIC_SUBJECT_COUNT);
 #endif
 }
 
@@ -372,7 +372,7 @@ static uint16_t topic_get_subject_id(const uint64_t hash, const uint64_t defeats
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_defeats, const bool virgin)
+static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_evictions, const bool virgin)
 {
     struct cy_t* const cy = topic->cy;
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
@@ -381,14 +381,14 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
-             "🔜%*s'%s' #%016llx @%04x defeats=%llu->%llu age=%llu subscribed=%d sub_list=%p",
+             "🔜%*s'%s' #%016llx @%04x evict=%llu->%llu age=%llu subscribed=%d sub_list=%p",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
              (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
-             (unsigned long long)topic->defeats,
-             (unsigned long long)new_defeats,
+             (unsigned long long)topic->evictions,
+             (unsigned long long)new_evictions,
              (unsigned long long)topic->age,
              (int)topic->subscribed,
              (void*)topic->sub_list);
@@ -400,15 +400,15 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
         topic->subscribed = false;
     }
 
-    // We're not allowed to alter the defeat counter as long as the topic remains in the tree! So we remove it first.
+    // We're not allowed to alter the eviction counter as long as the topic remains in the tree! So we remove it first.
     if (!virgin) {
         cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
 
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
-    // Note that it is possible that (hash+old_defeats)%6144 == (hash+new_defeats)%6144, which means that we
+    // Note that it is possible that (hash+old_evictions)%6144 == (hash+new_evictions)%6144, which means that we
     // stay with the same subject-ID. No special case is required for this, we handle this normally.
-    topic->defeats    = new_defeats;
+    topic->evictions    = new_evictions;
     size_t iter_count = 0;
     while (true) {
         assert(iter_count <= cy->topic_count);
@@ -431,7 +431,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
             // The age of the moving topic is being reset to zero, meaning that it will not disturb any other non-new
             // topic, which ensures that the total impact on the network is minimized.
-            allocate_topic(other, other->defeats + 1U, false);
+            allocate_topic(other, other->evictions + 1U, false);
             // Remember that we're still out of tree at the moment. We pushed the other topic out of its slot,
             // but it is possible that there was a chain reaction that caused someone else to occupy this slot.
             // Since that someone else was ultimately pushed out by the topic that just lost arbitration to us,
@@ -440,7 +440,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
             // Now, moving that one could also cause a chain reaction, but we know that eventually we will run
             // out of low-rank topics to move and will succeed.
         } else {
-            topic->defeats++; // We lost arbitration, keep looking.
+            topic->evictions++; // We lost arbitration, keep looking.
         }
     }
 
@@ -459,13 +459,13 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_de
     }
 
     CY_TRACE(cy,
-             "🔚%*s'%s' #%016llx @%04x defeats=%llu age=%llu subscribed=%d iters=%zu",
+             "🔚%*s'%s' #%016llx @%04x evict=%llu age=%llu subscribed=%d iters=%zu",
              (call_depth - 1) * call_depth_indent,
              "",
              topic->name,
              (unsigned long long)topic->hash,
              cy_topic_get_subject_id(topic),
-             (unsigned long long)topic->defeats,
+             (unsigned long long)topic->evictions,
              (unsigned long long)topic->age,
              (int)topic->subscribed,
              iter_count);
@@ -522,7 +522,7 @@ static cy_err_t publish_heartbeat(struct cy_topic_t* const topic, const cy_us_t 
     topic->age++;
     const struct heartbeat_t msg = make_heartbeat(now - cy->started_at,
                                                   cy->uid,
-                                                  (uint64_t[3]){ topic->defeats, topic->age, 0 },
+                                                  (uint64_t[3]){ topic->evictions, topic->age, 0 },
                                                   topic->hash,
                                                   topic->name_length,
                                                   topic->name);
@@ -567,34 +567,34 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         return;
     }
     const uint64_t other_hash    = gossip->hash;
-    const uint64_t other_defeats = gossip->value[0];
+    const uint64_t other_evictions = gossip->value[0];
     const uint64_t other_age     = gossip->value[1];
 
     // Find the topic in our local database.
     struct cy_t* const cy   = sub->topic->cy;
     struct cy_topic_t* mine = cy_topic_find_by_hash(cy, other_hash);
     if (mine == NULL) { // We don't know this topic, but we still need to check for a subject-ID collision.
-        mine = cy_topic_find_by_subject_id(cy, topic_get_subject_id(other_hash, other_defeats));
+        mine = cy_topic_find_by_subject_id(cy, topic_get_subject_id(other_hash, other_evictions));
         if (mine == NULL) {
             return; // We are not using this subject-ID, no collision.
         }
-        assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other_hash, other_defeats));
+        assert(cy_topic_get_subject_id(mine) == topic_get_subject_id(other_hash, other_evictions));
         const bool win = left_wins(mine, other_age, other_hash);
         CY_TRACE(cy,
                  "Topic collision 💥 @%04x discovered via gossip from uid=%016llx nid=%04x; we %s. Contestants:\n"
-                 "\t local  #%016llx defeats=%llu log2(age=%llx)=%+d '%s'\n"
-                 "\t remote #%016llx defeats=%llu log2(age=%llx)=%+d '%s'",
+                 "\t local  #%016llx evict=%llu log2(age=%llx)=%+d '%s'\n"
+                 "\t remote #%016llx evict=%llu log2(age=%llx)=%+d '%s'",
                  cy_topic_get_subject_id(mine),
                  (unsigned long long)heartbeat.uid,
                  transfer.remote_node_id,
                  (win ? "WIN" : "LOSE"),
                  (unsigned long long)mine->hash,
-                 (unsigned long long)mine->defeats,
+                 (unsigned long long)mine->evictions,
                  (unsigned long long)mine->age,
                  log2_floor(mine->age),
                  mine->name,
                  (unsigned long long)other_hash,
-                 (unsigned long long)other_defeats,
+                 (unsigned long long)other_evictions,
                  (unsigned long long)other_age,
                  log2_floor(other_age),
                  gossip->name);
@@ -604,7 +604,7 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         // will also move, but the trick is that the others could have settled on different subject-IDs.
         // Everyone needs to publish their own new allocation and then we will pick max subject-ID out of that.
         if (!win) {
-            allocate_topic(mine, mine->defeats + 1U, false);
+            allocate_topic(mine, mine->evictions + 1U, false);
         } else {
             schedule_gossip_asap(mine);
         }
@@ -612,35 +612,35 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
         assert(mine->hash == other_hash);
         const int_fast8_t mine_lage  = log2_floor(mine->age);
         const int_fast8_t other_lage = log2_floor(other_age);
-        if (mine->defeats != other_defeats) {
+        if (mine->evictions != other_evictions) {
             CY_TRACE(cy,
                      "Topic '%s' #%016llx divergent allocation discovered via gossip from uid=%016llx nid=%04x:\n"
-                     "\t local  @%04x defeats=%llu log2(age=%llu)=%+d\n"
-                     "\t remote @%04x defeats=%llu log2(age=%llu)=%+d",
+                     "\t local  @%04x evict=%llu log2(age=%llu)=%+d\n"
+                     "\t remote @%04x evict=%llu log2(age=%llu)=%+d",
                      mine->name,
                      (unsigned long long)mine->hash,
                      (unsigned long long)heartbeat.uid,
                      transfer.remote_node_id,
                      cy_topic_get_subject_id(mine),
-                     (unsigned long long)mine->defeats,
+                     (unsigned long long)mine->evictions,
                      (unsigned long long)mine->age,
                      mine_lage,
-                     topic_get_subject_id(other_hash, other_defeats),
-                     (unsigned long long)other_defeats,
+                     topic_get_subject_id(other_hash, other_evictions),
+                     (unsigned long long)other_evictions,
                      (unsigned long long)other_age,
                      other_lage);
-            assert(mine->defeats != other_defeats);
-            if ((mine_lage > other_lage) || ((mine_lage == other_lage) && (mine->defeats > other_defeats))) {
+            assert(mine->evictions != other_evictions);
+            if ((mine_lage > other_lage) || ((mine_lage == other_lage) && (mine->evictions > other_evictions))) {
                 CY_TRACE(cy, "We won, existing allocation not altered; expecting remote to adjust.");
                 schedule_gossip_asap(mine);
             } else {
-                assert((mine_lage <= other_lage) && ((mine_lage < other_lage) || (mine->defeats < other_defeats)));
+                assert((mine_lage <= other_lage) && ((mine_lage < other_lage) || (mine->evictions < other_evictions)));
                 assert(mine_lage <= other_lage);
                 CY_TRACE(cy, "We lost, reallocating the topic to try and match the remote, or offer new alternative.");
                 const cy_us_t old_last_gossip = mine->last_gossip;
                 mine->age                     = max_u64(mine->age, other_age);
-                allocate_topic(mine, other_defeats, false);
-                if (mine->defeats == other_defeats) { // perfect sync, no need to gossip
+                allocate_topic(mine, other_evictions, false);
+                if (mine->evictions == other_evictions) { // perfect sync, no need to gossip
                     update_last_gossip_time(mine, old_last_gossip);
                 }
             }
@@ -873,7 +873,7 @@ bool cy_topic_new(struct cy_t* const                  cy,
     topic->name_length             = strlen(topic->name);
 
     topic->hash    = topic_hash(topic->name_length, topic->name);
-    topic->defeats = 0; // starting from the preferred subject-ID.
+    topic->evictions = 0; // starting from the preferred subject-ID.
     topic->age     = 0;
 
     topic->user            = NULL;
@@ -890,10 +890,10 @@ bool cy_topic_new(struct cy_t* const                  cy,
     // Apply the hints from the user to achieve the desired initial state.
     if (optional_hint != NULL) {
         if (!is_pinned(topic->hash)) {
-            // Fit the lowest defeats counter such that we land at the specified subject-ID.
-            // Avoid negative remainders, so we don't use simple defeats=(subject_id-hash)%6144.
-            while (topic_get_subject_id(topic->hash, topic->defeats) != optional_hint->subject_id) {
-                topic->defeats++;
+            // Fit the lowest evictions counter such that we land at the specified subject-ID.
+            // Avoid negative remainders, so we don't use simple evictions=(subject_id-hash)%6144.
+            while (topic_get_subject_id(topic->hash, topic->evictions) != optional_hint->subject_id) {
+                topic->evictions++;
             }
         }
     }
@@ -990,7 +990,7 @@ void cy_topic_for_each(struct cy_t* const cy,
 
 uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic)
 {
-    return topic_get_subject_id(topic->hash, topic->defeats);
+    return topic_get_subject_id(topic->hash, topic->evictions);
 }
 
 cy_err_t cy_subscribe(struct cy_topic_t* const         topic,
