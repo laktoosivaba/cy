@@ -317,9 +317,10 @@ struct cy_t
     /// The user can use this field for arbitrary purposes.
     void* user;
 
-    /// Namespace prefix added to all topics created on this instance, unless the topic name starts with "/".
-    size_t namespace_length;
-    char   namespace_[CY_NAMESPACE_NAME_MAX + 1];
+    /// Namespace is prefix added to all topics created on this instance, unless the topic name starts with "/".
+    /// Local node name is prefixed to the topic name if it starts with `~`.
+    char namespace_[CY_NAMESPACE_NAME_MAX + 1];
+    char name[CY_NAMESPACE_NAME_MAX + 1];
 
     cy_now_t                 now;
     struct cy_transport_io_t transport;

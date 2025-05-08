@@ -10,8 +10,8 @@ The basic requirements are as follows:
 - A fully converged network must offer a service quality at least as good as a statically configured network.
 - The autoconfiguration protocol must be stateless.
 - Retain backward compatibility with old Cyphal nodes that do not support named topics.
-- Preferably, the background service traffic should be exchanged at a constant rate to simplify latency and throughput modeling.
-- Once a stable configuration is found, it should be possible to store it in the non-volatile memory per node for instant recovery after power cycling, bypassing the autoconfiguration stage. Obsolete or incorrect per-node configuration should not affect the rest of the network.
+- Preferably, the background service traffic should be exchanged at a constant rate to simplify latency and throughput analysis.
+- Once a stable configuration is found, it should be possible to store it in the non-volatile memory per node for instant recovery after power cycling, bypassing the autoconfiguration stage. Obsolete or incorrect per-node configuration should not affect the rest of the network. This ensures that a vehicular network with named topics will perform identically to a fully statically configured one until its configuration is changed.
 - Scalability beyond a thousand of nodes and topics per network.
 - The solution should be implementable in under 1k lines of C without dynamic memory or undue computing costs for small nodes.
 
@@ -91,6 +91,18 @@ utf8[<=KEY_CAPACITY] key
 @sealed
 ```
 
+```python
+# UID
+uint32 instance_id
+uint16 product_id
+uint16 vendor_id
+@assert _offset_ == {64}
+uint16 VENDOR_ID_INVALID    = 0
+uint16 VENDOR_ID_OPENCYPHAL = 1
+uint16 VENDOR_ID_PUBLIC     = 0xFFFF
+@sealed
+```
+
 ## Application API
 
 More or less in line with existing conventions, the API should offer at least:
@@ -99,9 +111,9 @@ More or less in line with existing conventions, the API should offer at least:
 
 - Namespace-prefixed topic names if the leading symbol is not a separator: `topic/name` expands into `/namespace/topic/name`, where the `/namespace` is set on the node instance during its initialization.
 
-- Local topics starting with `~` are prefixed with the UID: `~/topic/name` expands into `/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01. This is mostly intended for RPC endpoints, though.
+- Topics starting with `~` are prefixed with the node name, which itself is derived from UID by default: `~/topic/name` expands into `/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01, unless the local name is overridden. This is mostly intended for RPC endpoints, though.
 
-Ideally we should also introduce namespace renaming that locally map a given topic name prefix to another prefix.
+Ideally we should also introduce remappings that locally map a given topic name prefix to another prefix.
 
 The node-ID will disappear from the application scope completely. Ideally, it should be entirely automated away by the transport layer, since now we have the tools for that. Those applications that require fully manual control over the node-ID will still be able to set it up directly at the transport layer.
 
@@ -177,15 +189,29 @@ From an integrator standpoint, the only difference is that topics are now assign
 
 ## Missing features
 
-### RPC calls
+### RPC endpoints
 
 These are much easier since they require no consensus -- each node does its own allocations locally.
 To avoid data corruption on sudden node-ID reassignment, the transfer should include either the destination UID or its hash.
+
+It should be noted that named RPC endpoints are indeed very different in their usage semantics compared to the old numerical endpoints. One practical consequence is that it is now possible to embed the name of the addressed resource, whatever it may be (file, register, command, etc.) directly into the RPC endpoint name. This could be leveraged to great advantage to, for example, replace the old register API with dedicated endpoints, where the "register" name and type are parts of the RPC endpoint name, and the data type is simply:
+
+```python
+byte[<=256] write
+---
+byte[<=256] read
+```
+
+Such named services can then be used to configure the topics as well. For example, a local topic named `foo` could be remapped via an RPC endpoint `~/cyphal/foo` (or `~_/foo`, since we prefer shorter names to reduce gossip traffic), which is to contain the string topic name. Similar approaches could be used for topic introspection; for example, we could expose the topic type name via `~_/foo/t`.
 
 ### Wildcard topic subscriptions
 
 This is not a protocol feature but a library feature, which is easy to add.
 The protocol requires no (nontrivial) changes to incorporate this.
+
+### Type assignability checking
+
+There is currently no robust solution on the horizon, but one tentative solution is to suffix the topic name with the type name. For example, if we have `zubax.fluxgrip.Feedback.1.0`, the topic could be named `/magnet/rear/status.fb1`, where `.fb1` hints at the type name and version.
 
 
 ## Changes to the transport libraries: libudpard, libcanard, libserard, etc.

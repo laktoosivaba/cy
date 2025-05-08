@@ -69,24 +69,13 @@ static bool is_identifier_char(const char c)
 
 /// TODO this is ugly and dirty
 static bool compose_topic_name(const char* const ns,
-                               const uint64_t    uid,
+                               const char* const user,
                                const char* const name,
                                char* const       destination)
 {
     assert(ns != NULL);
     assert(name != NULL);
     assert(destination != NULL);
-
-    // format the ~ user part
-    static const size_t user_len = 19;
-    char                user[user_len + 2];
-    snprintf(user,
-             sizeof(user),
-             "/%04x/%04x/%08lx/",
-             (unsigned)(uid >> 48U) & UINT16_MAX,
-             (unsigned)(uid >> 32U) & UINT16_MAX,
-             (unsigned long)(uid & UINT32_MAX));
-
     // format a temporary representation
     char        tmp[CY_TOPIC_NAME_MAX + 10];
     const char* in = name;
@@ -97,7 +86,6 @@ static bool compose_topic_name(const char* const ns,
     } else {
         snprintf(tmp, sizeof(tmp), "%s", in);
     }
-
     // validate and canonicalize
     in         = tmp;
     char  prev = '\0';
@@ -408,7 +396,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_ev
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
     // Note that it is possible that (hash+old_evictions)%6144 == (hash+new_evictions)%6144, which means that we
     // stay with the same subject-ID. No special case is required for this, we handle this normally.
-    topic->evictions    = new_evictions;
+    topic->evictions  = new_evictions;
     size_t iter_count = 0;
     while (true) {
         assert(iter_count <= cy->topic_count);
@@ -565,9 +553,9 @@ static void on_heartbeat(struct cy_subscription_t* const sub,
     if (!is_topic) {
         return;
     }
-    const uint64_t other_hash    = gossip->hash;
+    const uint64_t other_hash      = gossip->hash;
     const uint64_t other_evictions = gossip->value[0];
-    const uint64_t other_age     = gossip->value[1];
+    const uint64_t other_age       = gossip->value[1];
 
     // Find the topic in our local database.
     struct cy_t* const cy   = sub->topic->cy;
@@ -673,7 +661,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
     cy->uid         = uid;
     cy->node_id     = (node_id <= node_id_max) ? node_id : CY_NODE_ID_INVALID;
     cy->node_id_max = node_id_max;
-
+    // namespace
     if (namespace_ != NULL) {
         const char* in = namespace_;
         size_t      i  = 0; // hack for now: just replace invalid characters
@@ -683,13 +671,18 @@ cy_err_t cy_new(struct cy_t* const             cy,
                 cy->namespace_[i] = c;
             }
         }
-        cy->namespace_length = i;
-        cy->namespace_[i]    = '\0';
+        cy->namespace_[i] = '\0';
     } else {
-        cy->namespace_length = 1;
-        cy->namespace_[0]    = '/'; // default namespace
-        cy->namespace_[1]    = '\0';
+        cy->namespace_[0] = '/'; // default namespace
+        cy->namespace_[1] = '\0';
     }
+    // the default name is just derived from UID, can be overridden by the user later
+    snprintf(cy->name,
+             sizeof(cy->name),
+             "/%04x/%04x/%08lx/",
+             (unsigned)(uid >> 48U) & UINT16_MAX,
+             (unsigned)(uid >> 32U) & UINT16_MAX,
+             (unsigned long)(uid & UINT32_MAX));
     cy->user                  = NULL;
     cy->now                   = now;
     cy->transport             = transport_io;
@@ -865,15 +858,15 @@ bool cy_topic_new(struct cy_t* const                  cy,
     memset(topic, 0, sizeof(*topic));
     topic->cy = cy;
 
-    if (!compose_topic_name(cy->namespace_, cy->uid, name, topic->name)) {
+    if (!compose_topic_name(cy->namespace_, cy->name, name, topic->name)) {
         goto hell;
     }
     topic->name[CY_TOPIC_NAME_MAX] = '\0';
     topic->name_length             = strlen(topic->name);
 
-    topic->hash    = topic_hash(topic->name_length, topic->name);
+    topic->hash      = topic_hash(topic->name_length, topic->name);
     topic->evictions = 0; // starting from the preferred subject-ID.
-    topic->age     = 0;
+    topic->age       = 0;
 
     topic->user            = NULL;
     topic->pub_transfer_id = 0;
