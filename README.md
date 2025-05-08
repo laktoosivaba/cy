@@ -8,7 +8,7 @@ The basic requirements are as follows:
 - Allow nodes to join the network with zero prior configuration of the protocol (at least above the physical layer).
 - Introduction of new topics and/or nodes must not disturb operation of the existing participants.
 - A fully converged network must offer a service quality at least as good as a statically configured network.
-- The autoconfiguration protocol must be stateless.
+- The autoconfiguration protocol must be stateless and must not require central coordinators or special nodes.
 - Retain backward compatibility with old Cyphal nodes that do not support named topics.
 - Preferably, the background service traffic should be exchanged at a constant rate to simplify latency and throughput analysis.
 - Once a stable configuration is found, it should be possible to store it in the non-volatile memory per node for instant recovery after power cycling, bypassing the autoconfiguration stage. Obsolete or incorrect per-node configuration should not affect the rest of the network. This ensures that a vehicular network with named topics will perform identically to a fully statically configured one until its configuration is changed.
@@ -32,7 +32,9 @@ cy_err_t res = cy_udp_new(&cy_udp,
                           1000);            // tx queue capacity per interface
 if (res < 0) { ... }
 
-// JOIN A TOPIC (to publish and/or subscribe):
+// JOIN A TOPIC (to publish and/or subscribe).
+// To interface with an old node that does not support named topics, put the subject-ID into the topic name;
+// e.g., `/1234`. This will bypass the automatic subject-ID allocation and pin the topic as specified.
 struct cy_udp_topic_t my_topic;
 cy_err_t res = cy_udp_topic_new(&cy_udp,
                                 &my_topic,
