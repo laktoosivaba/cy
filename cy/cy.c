@@ -708,7 +708,7 @@ cy_err_t cy_new(struct cy_t* const             cy,
     cy->heartbeat_next                         = cy->started_at;
     cy_err_t res                               = 0;
     if (cy->node_id > cy->node_id_max) {
-        cy->heartbeat_next += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
+        cy->heartbeat_next += (cy_us_t)random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
     } else {
         bloom64_set(&cy->node_id_bloom, cy->node_id);
         res = cy->transport.set_node_id(cy);
@@ -742,7 +742,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
     // If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
     // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
     if ((cy->node_id > cy->node_id_max) && !bloom64_get(&cy->node_id_bloom, metadata.remote_node_id)) {
-        cy->heartbeat_next += random_uint(0, 2 * MEGA);
+        cy->heartbeat_next += (cy_us_t)random_uint(0, 2 * MEGA);
         CY_TRACE(cy,
                  "🔭 Discovered neighbor %04x publishing on '%s'@%04x; new Bloom popcount %zu",
                  metadata.remote_node_id,
@@ -843,7 +843,7 @@ void cy_notify_node_id_collision(struct cy_t* const cy)
     bloom64_set(&cy->node_id_bloom, cy->node_id);
     // Restart the node-ID allocation process.
     cy->node_id = CY_NODE_ID_INVALID;
-    cy->heartbeat_next += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
+    cy->heartbeat_next += (cy_us_t)random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
     cy->transport.clear_node_id(cy);
 }
 

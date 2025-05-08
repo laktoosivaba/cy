@@ -29,6 +29,6 @@ add_library(cy_udp STATIC cy_udp.c udp.c)
 target_link_libraries(cy_udp cy udpard)
 
 # UDP node example
-add_executable(udp_node udp_node.c)
+add_executable(udp_node main_udp.c)
 add_test(NAME run_udp_node COMMAND udp_node)
 target_link_libraries(udp_node cy_udp)

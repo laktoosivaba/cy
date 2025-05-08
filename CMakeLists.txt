@@ -34,7 +34,7 @@ endif ()
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 set(c_cxx_flags "\
 -Wall -Wextra -pedantic -fstrict-aliasing -Wundef -Wconversion -Wsign-promo -Wsign-conversion \
--Wmissing-declarations -Wtype-limits -Wzero-as-null-pointer-constant \
+-Wmissing-declarations -Wtype-limits \
 ")
 # C
 set(CMAKE_C_STANDARD 11)
@@ -45,7 +45,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${c_cxx_flags}")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${c_cxx_flags}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${c_cxx_flags} -Wzero-as-null-pointer-constant")
 
 #add_subdirectory(tests)
 add_subdirectory(examples)

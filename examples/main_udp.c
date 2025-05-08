@@ -83,7 +83,7 @@ struct config_t
     struct config_topic_t* topics;
 };
 
-struct config_t load_config(const int argc, char* argv[])
+static struct config_t load_config(const int argc, char* argv[])
 {
     // Load default config.
     struct config_t cfg = {
@@ -144,10 +144,10 @@ struct config_t load_config(const int argc, char* argv[])
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-void on_msg_trace(struct cy_subscription_t* const subscription,
-                  const cy_us_t                   timestamp_us,
-                  const struct cy_transfer_meta_t metadata,
-                  const struct cy_payload_t       payload)
+static void on_msg_trace(struct cy_subscription_t* const subscription,
+                         const cy_us_t                   timestamp_us,
+                         const struct cy_transfer_meta_t metadata,
+                         const struct cy_payload_t       payload)
 {
     // Convert payload to hex.
     char hex[payload.size * 2 + 1];
