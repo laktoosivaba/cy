@@ -17,7 +17,7 @@ The basic requirements are as follows:
 
 Stretch goals:
 
-- Support subscriptions with wildcard topic name matching / name substitution.
+- Support subscriptions with wildcard topic name matching / name substitution. See <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
 
 ## TL;DR
 
@@ -257,6 +257,12 @@ Such named services can then be used to configure the topics as well. For exampl
 
 This is not a protocol feature but a library feature, which is easy to add.
 The protocol requires no (nontrivial) changes to incorporate this.
+
+One specific use case can be found here: <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
+
+An asterisk `*` should match a given topic name segment (between `/` like `abc/*/qwe` matches `abc/def/qwe`) and the matched string should be passed to the application via the callback. Similarly, `**` could perhaps be useful by analogy with glob patterns.
+
+More complex key expressions could eventually be supported in the spirit of Zenoh or even DDS.
 
 ### Type assignability checking
 
