@@ -28,13 +28,16 @@ cy_err_t res = cy_udp_new(&cy_udp,
                           local_unique_id,  // 64-bit composed of VID+PID+IID
                           "/my_namespace",  // topic name prefix (defaults to "/")
                           (uint32_t[3]){ udp_parse_iface_address("127.0.0.1") },
-                          CY_NODE_ID_INVALID,
-                          1000);   // tx queue capacity per interface
+                          CY_NODE_ID_INVALID, // will self-allocate
+                          1000);            // tx queue capacity per interface
 if (res < 0) { ... }
 
 // JOIN A TOPIC (to publish and/or subscribe):
 struct cy_udp_topic_t my_topic;
-cy_err_t res = cy_udp_topic_new(&cy_udp, &my_topic, "my_topic", NULL);
+cy_err_t res = cy_udp_topic_new(&cy_udp,
+                                &my_topic,
+                                "my_topic",  // expands into "/my_namespace/my_topic"
+                                NULL);
 if (res < 0) { ... }
 
 // SUBSCRIBE TO TOPIC (nothing needs to be done if we want to publish):
