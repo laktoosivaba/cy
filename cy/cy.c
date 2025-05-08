@@ -8,9 +8,17 @@
 #include <string.h>
 #include <stdio.h> ///< TODO remove dependency on stdio.h!
 
-#define HEARTBEAT_PUB_TIMEOUT_us 1000000L
+#define KILO 1000L
+#define MEGA 1000000LL
+
+#define HEARTBEAT_PUB_TIMEOUT_us (1 * MEGA)
 
 static size_t smaller(const size_t a, const size_t b)
+{
+    return (a < b) ? a : b;
+}
+
+static int64_t min_i64(const int64_t a, const int64_t b)
 {
     return (a < b) ? a : b;
 }
@@ -496,7 +504,7 @@ static struct heartbeat_t make_heartbeat(const cy_us_t     uptime,
 {
     assert(name_len <= CY_TOPIC_NAME_MAX);
     struct heartbeat_t obj = {
-        .uptime       = (uint32_t)(uptime / 1000000U),
+        .uptime       = (uint32_t)(uptime / MEGA),
         .uid          = uid,
         .topic_gossip = { .hash = hash, .value = { value[0], value[1], value[2] }, .name_length = (uint8_t)name_len },
     };
@@ -703,9 +711,10 @@ cy_err_t cy_new(struct cy_t* const             cy,
     // and to claim the address; if it's already taken, we will want to cause a collision to move the other node,
     // because manually assigned addresses take precedence over auto-assigned ones.
     // If we are not given a node-ID, we need to first listen to the network.
-    cy->heartbeat_period = CY_HEARTBEAT_PERIOD_DEFAULT_us;
-    cy->heartbeat_next   = cy->started_at;
-    cy_err_t res         = 0;
+    cy->heartbeat_period_max                   = 100 * KILO;
+    cy->heartbeat_full_gossip_cycle_period_max = 10 * MEGA;
+    cy->heartbeat_next                         = cy->started_at;
+    cy_err_t res                               = 0;
     if (cy->node_id > cy->node_id_max) {
         cy->heartbeat_next += random_uint(CY_START_DELAY_MIN_us, CY_START_DELAY_MAX_us);
     } else {
@@ -741,8 +750,7 @@ void cy_ingest(struct cy_topic_t* const        topic,
     // If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
     // The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
     if ((cy->node_id > cy->node_id_max) && !bloom64_get(&cy->node_id_bloom, metadata.remote_node_id)) {
-        // The mean extra time is chosen to be simply two heartbeat periods.
-        cy->heartbeat_next += random_uint(1, 3 * CY_HEARTBEAT_PERIOD_DEFAULT_us);
+        cy->heartbeat_next += random_uint(0, 2 * MEGA);
         CY_TRACE(cy,
                  "🔭 Discovered neighbor %04x publishing on '%s'@%04x; new Bloom popcount %zu",
                  metadata.remote_node_id,
@@ -798,9 +806,15 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
     struct cy_topic_t* const tp = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
     assert(tp->cy == cy);
 
-    // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
+    // Publish the heartbeat.
     res = publish_heartbeat(tp, now);
-    cy->heartbeat_next += cy->heartbeat_period; // Do not accumulate heartbeat phase slip!
+
+    // Schedule the next one.
+    // If this heartbeat failed to publish, we simply give up and move on to try again in the next period.
+    assert(cy->topic_count > 0); // we always have at least the heartbeat topic
+    const cy_us_t period = min_i64(cy->heartbeat_full_gossip_cycle_period_max / (cy_us_t)cy->topic_count, //
+                                   cy->heartbeat_period_max);
+    cy->heartbeat_next += period; // Do not accumulate heartbeat phase slip!
 
     return res;
 }

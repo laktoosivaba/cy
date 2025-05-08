@@ -52,10 +52,6 @@ extern "C"
 /// If not sure, use this value for the transfer-ID timeout.
 #define CY_TRANSFER_ID_TIMEOUT_DEFAULT_us 2000000L
 
-/// The rate at which the heartbeat topic is published is also the absolute minimum invocation interval of cy_heartbeat.
-/// It is not an error to invoke it more often, and in fact it is desirable to reduce possible frequency aliasing.
-#define CY_HEARTBEAT_PERIOD_DEFAULT_us 100000L
-
 /// If a node-ID is provided by the user, it will be used as-is and the node will become operational immediately.
 ///
 /// If no node-ID is given, the node will take some time after it is started before it starts sending transfers.
@@ -69,8 +65,8 @@ extern "C"
 /// allocated automatically.
 ///
 /// TODO this goes to the transport layer; see below why.
-#define CY_START_DELAY_MIN_us (CY_HEARTBEAT_PERIOD_DEFAULT_us * 5)
-#define CY_START_DELAY_MAX_us (CY_START_DELAY_MIN_us * 5)
+#define CY_START_DELAY_MIN_us 1000000L
+#define CY_START_DELAY_MAX_us 3000000L
 
 /// The range of unregulated identifiers to use for CRDT topic allocation. The range must be the same for all
 /// applications.
@@ -292,7 +288,7 @@ struct cy_subscription_t
 };
 
 /// There are only two functions whose invocations may result in network traffic:
-/// - cy_heartbeat() -- heartbeat only, at most one per call (for default rate see CY_HEARTBEAT_PERIOD_DEFAULT_us).
+/// - cy_heartbeat() -- heartbeat only, at most one per call.
 /// - cy_publish()   -- user transfers only.
 /// Creation of a new topic may cause resubscription of any existing topics (all in the worst case).
 struct cy_t
@@ -332,7 +328,8 @@ struct cy_t
     struct cy_topic_t*       heartbeat_topic;
     struct cy_subscription_t heartbeat_sub;
     cy_us_t                  heartbeat_next;
-    cy_us_t                  heartbeat_period; ///< Can be adjusted by the user. Prefer larger period on CAN.
+    cy_us_t                  heartbeat_period_max;
+    cy_us_t                  heartbeat_full_gossip_cycle_period_max; ///< Max time to gossip all local topics.
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;
