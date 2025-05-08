@@ -488,8 +488,7 @@ static_assert(sizeof(struct topic_gossip_t) == 8 * 3 + 8 + 1 + CY_TOPIC_NAME_MAX
 struct heartbeat_t
 {
     uint32_t              uptime;
-    uint16_t              _padding_a;
-    uint16_t              user_word;
+    uint32_t              user_word;
     uint64_t              uid;
     struct topic_gossip_t topic_gossip;
 };
