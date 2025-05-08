@@ -216,7 +216,7 @@ There is currently no robust solution on the horizon, but one tentative solution
 
 ## Changes to the transport libraries: libudpard, libcanard, libserard, etc.
 
-### Pessimistic DAD
+### Pessimistic DAD fully managed by the transport libraries
 
 Implement the pessimistic duplicate address detection (DAD) method as the new node-ID assignment policy, while still allowing fully manual assignments for the benefit of applications that require full control over the transport.
 
