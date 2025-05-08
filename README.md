@@ -1,4 +1,4 @@
-# Experimental robust zero-configuration decentralized (brokerless) Cyphal with named topics
+# Experimental zero-configuration decentralized Cyphal with named topics
 
 A minimalist Cyphal extension adding named topics that are automatically allocated in the subject-ID space without a central coordinator. A simple decentralized node-ID autoconfiguration protocol is added as well.
 
@@ -96,12 +96,16 @@ utf8[<=KEY_CAPACITY] key
 More or less in line with existing conventions, the API should offer at least:
 
 - Fully specified topic names starting with a name separator: `/topic/name`
-- Namespace-prefixed topic names if the leading symbol is not a separator: `topic/name` expands into `/namespace/topic/name`, where the namespace is set on the node instance during its initialization.
-- Local topics that start with `~` are prefixed with the UID: `~/topic/name` expands into `/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01.
+
+- Namespace-prefixed topic names if the leading symbol is not a separator: `topic/name` expands into `/namespace/topic/name`, where the `/namespace` is set on the node instance during its initialization.
+
+- Local topics starting with `~` are prefixed with the UID: `~/topic/name` expands into `/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01. This is mostly intended for RPC endpoints, though.
 
 Ideally we should also introduce namespace renaming that locally map a given topic name prefix to another prefix.
 
 The node-ID will disappear from the application scope completely. Ideally, it should be entirely automated away by the transport layer, since now we have the tools for that. Those applications that require fully manual control over the node-ID will still be able to set it up directly at the transport layer.
+
+To interact with old nodes not supporting named topics, pinned topics are used. For example, to subscribe to the old `uavcan.node.port.List` message (not needed for the new design), one will subscribe to topic `/7510`.
 
 
 ## Rules
@@ -139,13 +143,34 @@ Set the last gossip time of the topic to zero.
 
 ### When a new heartbeat is received
 
-TODO
+Check the named resource kind. If the name starts with a slash and ends with `[0-9a-zA-Z_]`, it is a topic name. It is not strictly necessary to deserialize the full name, so some processing effort can be saved on that.
+
+Find the topic by hash in the local node.
+
+#### If we don't know this topic
+
+If the topic is NOT found, find the topic by the allocated subject-ID (which is `(hash+evictions)%6144`) to check if there is a collision. If there is, do a CRDT merge (arbitration):
+- Pinned topic wins. Note that both cannot be pinned by design, because pinned topics have hash = subject-ID.
+- Otherwise, the topic with the greater $\log_2(\lfloor\text{age}\rfloor)$ wins.
+- Otherwise, the topic with the smaller hash wins.
+
+If the local topic lost, find another subject-ID for it. Regardless of the arbitration outcome, schedule the topic for gossip out-of-order next to resolve the conflict sooner (if we won) or to inform other nodes that we have moved, because other members of our topic could have settled on a different subject-ID and becase we could have collided with a different topic, since no node stores the full set. It may take several iterations until we settle on a new subject-ID. Each iteration requires resubscription to a new ID, which implies the possibility of data loss because the members of our topic may not switch fully synchronously (although we mitigate that risk somewhat by scheduling next gossip out of order). This is why it is essential that old topics win arbitration, so that newcomers do not disturb the network.
+
+#### If we do know this topic
+
+If the topic is found locally, we need to check for divergent allocations. If the subject-ID is the same, nothing needs to be done except CRDT-merging the age (see below). Otherwise, arbitrate to decide who has the correct subject-ID. If log-age of the local topic is greater than the remote, OR (log-age is the same AND local eviction counter is greater), we win.
+
+1. If the local topic won, schedule it for gossip ASAP to inform the remote participant that it needs to move.
+2. If the local topic lost:
+  - Merge the local age as max(local age, remote age). This needs to be done first because we're going to be moving the topic next, and it has to have the correct age to arbitrate correctly against possible contenders for the proposed subject-ID.
+  - Try moving it to match the remote subject-ID. If there is another local topic and it wins arbitration against this topic (using the same arbitration rules as defined above for external topics), keep looking until a free subject-ID is found. If the other local topic lost, schedule it for gossip next to inform other members of that topic that they have to move, too (NB: they may refuse if we don't know the correct age yet, in which case we will repeat this process later on with a different outcome).
+  - If the topic was moved to the exact same subject-ID as the remote, nothing else needs to be done.
+  - Otherwise, schedule this topic for gossip ASAP to inform the remote party that we couldn't follow, thus asking it to move a few steps up (increase the eviction counter). This ping-pong will continue until a slot is found that no one objects against.
+
+Regardless of the above steps, merge the local age as max(local age, remote age).
+
 
 ## Compatibility with old nodes
-
-Pinned topics are introduced to communicate with old nodes that do not support named topics. A pinned topic is simply a topic that contains the decimal subject-ID in its name after the leading slash, e.g. `/123`. Leading zeros are not allowed to ensure that all such names are canonical form.
-
-While it is possible to pin a topic at any subject-ID, it is best to do it in range \[6144, 8191] to avoid collisions, since old nodes are unable to participate in the consensus protocol.
 
 From an integrator standpoint, the only difference is that topics are now assigned not via registers as numbers, but as topic name remappings as strings: `uavcan.pub.my_subject.id=1234` is now a remapping from `my_subject` to `/1234`.
 
@@ -179,9 +204,9 @@ The application will need to be notified when the local node-ID is changed to pe
 
 The overall cost of the Pessimistic DAD is about 100~200 extra lines of code per transport library.
 
-### Extensions to support Stochastic MOM
+### Extensions to support stochastic MOM
 
-Stochastic multiple occupant monitoring (MOM) mixes parts of the 51-bit topic discriminator (which itself is defined as the 51 most significant bits of the 64-bit topic hash) into the transfer such that only transfers that carry the expected topic discriminator can be correctly received. This prevents data misinterpretation during the topic allocation phase, when multiple topics may briefly occupy the same subject-ID until the new conflict-free consensus is found by the network. How the topic discriminator is leveraged depends on the specific transport.
+Stochastic multiple occupant monitoring (MOM) mixes parts of the 51-bit topic discriminator (which itself is defined as the 51 most significant bits of the 64-bit topic hash: `hash>>13`) into the transfer such that only transfers that carry the expected topic discriminator can be correctly received. This prevents data misinterpretation during the topic allocation phase, when multiple topics may briefly occupy the same subject-ID until the new conflict-free consensus is found by the network. How the topic discriminator is leveraged depends on the specific transport.
 
 When the transport detects a topic discriminator mismatch, it has the option to notify the CRDT protocol so that it can assign a higher priority to the topic where the conflict is found. It is not essential because even if no such notification is delivered, CRDT will eventually reach a conflict-free consensus, but the time required may be longer.
 
