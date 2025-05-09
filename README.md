@@ -244,7 +244,11 @@ From an integrator standpoint, the only difference is that topics are now assign
 ### RPC endpoints
 
 These are much easier since they require no consensus -- each node does its own allocations locally.
-To avoid data corruption on sudden node-ID reassignment, the transfer should include either the destination UID or its hash.
+To avoid data corruption on sudden node-ID reassignment, the transfer should include the endpoint discriminator, similar to the topic discriminator.
+
+Ideally, out-of-order heartbeats should be allowed to enable faster RPC endpoint queries. When a client desires to invoke an RPC query, it will have to learn which node is providing it and under what service-ID. To speed up the discovery, a query is published, similarly to ARP. Then not just the server but all other clients that happen to know this endpoint will respond.
+
+Ideally, servers should always allocate a given endpoint to the same service-ID to minimize variability across reboots. It is up to the server to decide how the service-IDs are allocated, but ideally it could be also a hash of the endpoint name: `rapidhash(endpoint_name) & 0xFF`, incremented in case of a local collision.
 
 It should be noted that named RPC endpoints are indeed very different in their usage semantics compared to the old numerical endpoints. One practical consequence is that it is now possible to embed the name of the addressed resource, whatever it may be (file, register, command, etc.) directly into the RPC endpoint name. This could be leveraged to great advantage to, for example, replace the old register API with dedicated endpoints, where the "register" name and type are parts of the RPC endpoint name, and the data type is simply:
 
@@ -254,7 +258,9 @@ byte[<=256] write
 byte[<=256] read
 ```
 
-Such named services can then be used to configure the topics as well. For example, a local topic named `foo` could be remapped via an RPC endpoint `~/cyphal/foo` (or `~_/foo`, since we prefer shorter names to reduce gossip traffic), which is to contain the string topic name. Similar approaches could be used for topic introspection; for example, we could expose the topic type name via `~_/foo/t`.
+Such named services can then be used to configure the topics as well. For example, a local topic named `foo` could be remapped via an RPC endpoint `~/cyphal/foo?` (or `~_/foo?`, since we prefer shorter names to reduce gossip traffic), which is to contain the string topic name. Similar approaches could be used for topic introspection; for example, we could expose the topic type name via `~_/foo/t?`. One possible issue with this is that it is too easy to exhaust the small service-ID space of only 256 items; also, a large number of endpoints will make their discovery slow, since we announce at most one per heartbeat.
+
+If the sender happens to know the node-ID of the server from other sources (e.g., deduced from another transfer), then it is desirable to eliminate the service-ID mapping uncertainty completely (it will also save memory on the server because every service port requires some state to keep at the transport layer). In that case, the service-ID could be constant for all named endpoints (say 511) and the RPC request payload would be prepended with the full 64-bit endpoint hash. There is, strictly speaking, no need to prepend the hash to the response since it can be matched using the transfer-ID, but it could be useful as an additional correctness check.
 
 ### Wildcard topic subscriptions
 

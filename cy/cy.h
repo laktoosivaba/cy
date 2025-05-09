@@ -314,6 +314,10 @@ struct cy_subscription_t
 /// - cy_heartbeat() -- heartbeat only, at most one per call.
 /// - cy_publish()   -- user transfers only.
 /// Creation of a new topic may cause resubscription of any existing topics (all in the worst case).
+///
+/// TODO: ALLOW OUT-OF-ORDER HEARTBEATS BY DEFAULT, DISABLE AS AN OPTION FOR STRICT DETERMINISTIC SCHEDULING.
+/// TODO: this means that when we schedule a gossip asap, reschedule the next heartbeat as well.
+/// This will enable faster convergence and fast queries to discover a specific topic or RPC.
 struct cy_t
 {
     /// The UID is actually composed of 16-bit vendor-ID, 16-bit product-ID, and 32-bit instance-ID (aka serial
