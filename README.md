@@ -18,6 +18,7 @@ The basic requirements are as follows:
 Stretch goals:
 
 - Support subscriptions with wildcard topic name matching / name substitution. See <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
+- Optional reliable transfers with ack/retry
 
 ## TL;DR
 
