@@ -258,6 +258,29 @@ struct cy_topic_t
     /// and nodes that happen to be in a different partition will never see those topics.
     cy_us_t last_gossip;
 
+    /// Time when this topic last saw a conflict (another topic occupying its subject-ID) or a divergence
+    /// (same topic elsewhere using a different subject-ID), even if the local entry was not affected
+    /// (meaning that this timestamp is updated regardless of whether the local topic won arbitration).
+    ///
+    /// The purpose of this timestamp is to provide the local application with a topic stability metric:
+    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
+    /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
+    /// node using this topic has joined and had to catch up.
+    ///
+    /// TODO this is currently not implemented; simply update it from on_heartbeat.
+    cy_us_t last_event_ts;
+
+    /// Time when this topic last had to be locally moved to another subject-ID due to a conflict
+    /// (another topic occupying its subject-ID) or a divergence (same topic elsewhere using a different subject-ID).
+    /// Events affecting other nodes are not considered here, meaning that this is updated only if the local topic
+    /// loses arbitration.
+    ///
+    /// The purpose of this timestamp is to provide the local application with a topic stability metric:
+    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
+    ///
+    /// TODO this is currently not implemented; simply update it from on_heartbeat.
+    cy_us_t last_local_event_ts;
+
     /// The user can use this field for arbitrary purposes.
     void* user;
 
@@ -321,6 +344,30 @@ struct cy_t
     /// Local node name is prefixed to the topic name if it starts with `~`.
     char namespace_[CY_NAMESPACE_NAME_MAX + 1];
     char name[CY_NAMESPACE_NAME_MAX + 1];
+
+    /// Time when this node last saw a conflict (another topic occupying its subject-ID) or a divergence
+    /// (same topic elsewhere using a different subject-ID) involving any of its topics,
+    /// even if the local topic was not affected (meaning that this timestamp is updated regardless of whether
+    /// the local topic won arbitration).
+    ///
+    /// The purpose of this timestamp is to provide the local application with a network stability metric:
+    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
+    /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
+    /// node using any of our topics has joined and had to catch up.
+    ///
+    /// TODO this is currently not implemented; simply update it from on_heartbeat.
+    cy_us_t last_event_ts;
+
+    /// Time when any of the local topics last had to be locally moved to another subject-ID due to a conflict
+    /// (another topic occupying its subject-ID) or a divergence (same topic elsewhere using a different subject-ID).
+    /// Events affecting other nodes are not considered here, meaning that this is updated only if the local topic
+    /// loses arbitration.
+    ///
+    /// The purpose of this timestamp is to provide the local application with a network stability metric:
+    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
+    ///
+    /// TODO this is currently not implemented; simply update it from on_heartbeat.
+    cy_us_t last_local_event_ts;
 
     cy_now_t                 now;
     struct cy_transport_io_t transport;
