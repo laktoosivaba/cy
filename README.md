@@ -74,7 +74,7 @@ while (true) {
 
 ### Node-ID autoconfiguration
 
-The new node-ID autoconfiguration protocol does not require an allocator; instad, a straightforward address claiming procedure is implemented:
+The new node-ID autoconfiguration protocol does not require an allocator; instead, a straightforward address claiming procedure is implemented:
 
 1. When joining the network without a node-ID preconfigured, the node will listen for a random time interval ca. 1~3 seconds. The source node-ID of each received transfer is marked as taken in a local bitmask. If the transport layer has a large node-ID space (which is the case for every transport except Cyphal/CAN), the bitmask is replaced with a Bloom filter, whose bit capacity defines the maximum number of nodes that can be autoconfigured in this way (e.g., a 512-byte Bloom filter allows allocating at least 4096 nodes).
 
@@ -103,7 +103,7 @@ How the topic discriminator is used depends on the specifics of the transport la
 
 When receiving a transport frame, the transport layer will compare the topic discriminator (or relevant parts thereof) provided by the topic autoconfiguration protocol against the value in the received frame. If a divergence is found, the topic autoconfiguration engine is notified, such that it assigns a higher priority to resolving the conflict as soon as possible (this notification is not essential for the protocol to function, since the CRDT will eventually converge regardless, but it does speed up conflict resolution), and the frame is discarded. This is called stochastic multiple occupant monitoring, or *Stochastic MOM*.
 
-Assuming perfect hashing (this is a ~sensible assumption for Rapidhash but an overly optimistic one for CRCs), the probability of Stochastic MOM failure -- i.e., data misinterpretation -- given 1000 topics and using only 32 bits from the topic discriminator is 1.89e-8, or one in 53 million. If the topic hash is used to seed a CRC, the probability will somewhat increase.
+Assuming perfect hashing (this is a ~sensible assumption for Rapidhash but an overly optimistic one for CRCs), the probability of Stochastic MOM failure -- i.e., data misinterpretation -- given 1000 topics and using *only 32 bits* from the topic discriminator is 1.89e-8, or one in 53 million. If the topic hash is used to seed a CRC, the probability will somewhat increase.
 
 It is essential to ensure that existing topics are not affected by new ones. To this end, each topic bears an age counter, which defines the priority of the topic during arbitration. The age counter should increase with time and usage of the topic. Currently, it is incremented whenever the topic is gossiped, and whenever a transfer is received (sic!) on the topic. Publishing a transfer does not increase the age because the publisher may be unconnected to subscribers. The age counter is CRDT-merged using siple max(), as a result, the counter grows faster as the number of nodes using the topic is increased.
 
@@ -181,7 +181,7 @@ The mapping is guaranteed to be correct except during the initial configuration 
 
 Applications that require immediate connectivity without the initial configuration delays can store the stable configuration in non-volatile memory.
 
-While the initial configuration is in progress, transfers may be emitted on the wrong subject-IDs, which causes data loss. The 51-bit topic discriminator is used to avoid data misinterpretation.
+While the autoconfiguration is in progress, transfers may briefly be emitted on the wrong subject-IDs. The 51-bit topic discriminator is used to avoid data misinterpretation in case of an allocation collision, allowing each subscriber on the oversubscribed subject-ID to pick only relevant transfers.
 
 ### When asked to subscribe
 
