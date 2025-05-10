@@ -520,10 +520,14 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, const uint
 
 /// Iterate over all topics in an unspecified order.
 /// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
-/// The function does nothing if the cy or callback are NULL.
-void cy_topic_for_each(struct cy_t* const cy,
-                       void (*callback)(struct cy_topic_t* const topic, void* const user),
-                       void* const user);
+/// The iteration stops when the returned topic is NULL.
+/// The set of topics SHALL NOT be mutated while iterating over it (a restart will be needed otherwise).
+/// Usage:
+///     for (struct cy_topic_t* topic = cy_topic_iter_first(cy); topic != NULL; topic = cy_topic_iter_next(topic)) {
+///         ...
+///     }
+struct cy_topic_t* cy_topic_iter_first(struct cy_t* const cy);
+struct cy_topic_t* cy_topic_iter_next(struct cy_topic_t* const topic);
 
 uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic);
 

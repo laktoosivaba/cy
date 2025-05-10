@@ -943,24 +943,14 @@ struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, const uint
     return topic;
 }
 
-static void topic_for_each_impl(struct cy_tree_t* const tree, // NOLINT(*-no-recursion)
-                                void (*callback)(struct cy_topic_t* const topic, void* user),
-                                void* const user)
+struct cy_topic_t* cy_topic_iter_first(struct cy_t* const cy)
 {
-    if (tree != NULL) {
-        topic_for_each_impl(tree->lr[0], callback, user);
-        callback((struct cy_topic_t*)tree, user);
-        topic_for_each_impl(tree->lr[1], callback, user);
-    }
+    return (struct cy_topic_t*)cavl2_min(cy->topics_by_hash);
 }
 
-void cy_topic_for_each(struct cy_t* const cy,
-                       void (*callback)(struct cy_topic_t* const topic, void* user),
-                       void* const user)
+struct cy_topic_t* cy_topic_iter_next(struct cy_topic_t* const topic)
 {
-    if ((cy != NULL) && (callback != NULL)) {
-        topic_for_each_impl(cy->topics_by_hash, callback, user);
-    }
+    return (struct cy_topic_t*)cavl2_next_greater(&topic->index_hash);
 }
 
 uint16_t cy_topic_get_subject_id(const struct cy_topic_t* const topic)

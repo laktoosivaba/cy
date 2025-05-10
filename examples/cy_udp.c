@@ -326,39 +326,6 @@ hell:
     }
 }
 
-/// Contains parallel arrays of handles and the topics they correspond to.
-/// Each topic will occur multiple times if redundant interfaces are used, each time with a different handle,
-/// since we keep individual handles per redundant interface. The iface index of each handle is written out into
-/// a separate array.
-struct topic_scan_context_rx_t
-{
-    size_t                  count;
-    size_t                  capacity;
-    struct udp_rx_t**       handles;
-    struct cy_udp_topic_t** topics;
-    uint_fast8_t*           iface_indexes;
-};
-
-static void on_topic_for_each(struct cy_topic_t* const cy_topic, void* const user)
-{
-    assert((cy_topic != NULL) && (user != NULL));
-    if (cy_topic_has_local_subscribers(cy_topic)) {
-        struct cy_udp_topic_t* const          topic  = (struct cy_udp_topic_t*)cy_topic;
-        const struct cy_udp_t* const          cy_udp = (struct cy_udp_t*)cy_topic->cy;
-        struct topic_scan_context_rx_t* const ctx    = (struct topic_scan_context_rx_t*)user;
-        for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-            if (is_valid_ip(cy_udp->io[i].local_iface_address)) {
-                assert(topic->sock_rx[i].fd >= 0);
-                ctx->handles[ctx->count]       = &topic->sock_rx[i];
-                ctx->topics[ctx->count]        = topic;
-                ctx->iface_indexes[ctx->count] = i;
-                ctx->count++;
-            }
-            assert(ctx->count <= ctx->capacity);
-        }
-    }
-}
-
 static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const cy_us_t deadline)
 {
     tx_offload(cy_udp); // Free up space in the TX queues and ensure all TX sockets are blocked.
@@ -379,28 +346,36 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const cy_us_t dea
     // don't want to scan the topic index to count the ones we are subscribed to.
     // This is a rather cumbersome operation as we need to traverse the topic tree; perhaps we should switch to epoll?
     const size_t           max_rx_count = CY_UDP_IFACE_COUNT_MAX * cy_udp->base.topic_count;
+    size_t                 rx_count     = 0;
     struct udp_rx_t*       rx_await[max_rx_count]; // Initialization is not possible and is very wasteful anyway.
     struct cy_udp_topic_t* rx_topics[max_rx_count];
     uint_fast8_t           rx_iface_indexes[max_rx_count];
-    struct topic_scan_context_rx_t rx_ctx = {
-        .count         = 0,
-        .capacity      = max_rx_count,
-        .handles       = rx_await,
-        .topics        = rx_topics,
-        .iface_indexes = rx_iface_indexes,
-    };
-    cy_topic_for_each(&cy_udp->base, &on_topic_for_each, &rx_ctx);
+    for (struct cy_udp_topic_t* topic = (struct cy_udp_topic_t*)cy_topic_iter_first(&cy_udp->base); topic != NULL;
+         topic                        = (struct cy_udp_topic_t*)cy_topic_iter_next(&topic->base)) {
+        if (cy_topic_has_local_subscribers(&topic->base)) {
+            for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
+                if (is_valid_ip(cy_udp->io[i].local_iface_address)) {
+                    assert(topic->sock_rx[i].fd >= 0);
+                    assert(rx_count < max_rx_count);
+                    rx_await[rx_count]         = &topic->sock_rx[i];
+                    rx_topics[rx_count]        = topic;
+                    rx_iface_indexes[rx_count] = i;
+                    rx_count++;
+                }
+            }
+        }
+    }
 
     // Do a blocking wait.
     const cy_us_t wait_timeout = deadline - min_i64(cy_udp_now(), deadline);
-    cy_err_t      res          = udp_wait(wait_timeout, tx_count, tx_await, rx_ctx.count, rx_await);
+    cy_err_t      res          = udp_wait(wait_timeout, tx_count, tx_await, rx_count, rx_await);
     if (res < 0) {
         goto hell;
     }
     const cy_us_t ts = cy_udp_now(); // immediately after unblocking
 
     // Process readable handles. The writable ones will be taken care of later.
-    for (size_t i = 0; i < rx_ctx.count; i++) {
+    for (size_t i = 0; i < rx_count; i++) {
         if (rx_await[i] == NULL) {
             continue; // Not ready for reading.
         }
