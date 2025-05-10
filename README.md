@@ -71,6 +71,12 @@ while (true) {
 }
 ```
 
+Build-time dependencies:
+
+- [cavl2.h](https://github.com/pavel-kirienko/cavl)
+- [Rapidhash](https://github.com/Nicoshev/rapidhash) by Nicolas De Carli (BSD 2-clause license)
+- libudpard
+
 ## Solution
 
 ### Node-ID autoconfiguration
@@ -81,7 +87,7 @@ The new node-ID autoconfiguration protocol does not require an allocator; instea
 
 2. When a new node is discovered, the listening time is extended by a random penalty ca. 0~1 seconds. This is to reduce the likelihood of multiple nodes claiming an address at the same time.
 
-3. Once the initial delay has expired, an unoccipied node-ID is chosen from the bitmask/Bloom filter and marked as used. The first heartbeat is published immediately to claim the address.
+3. Once the initial delay has expired, an unoccupied node-ID is chosen from the bitmask/Bloom filter and marked as used. The first heartbeat is published immediately to claim the address.
 
 If a node-ID conflict is discovered at any later point, even if the node-ID was configured manually, we reset the bitmask/Bloom filter, reset the local node-ID, and restart the process from scratch.
 
