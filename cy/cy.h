@@ -516,7 +516,7 @@ void cy_topic_destroy(struct cy_topic_t* const topic);
 /// Complexity is logarithmic in the number of topics. NULL if not found.
 struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* const name);
 struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash);
-struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id);
+struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, const uint16_t subject_id);
 
 /// Iterate over all topics in an unspecified order.
 /// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.

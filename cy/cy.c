@@ -1,10 +1,13 @@
 /// Copyright (c) Pavel Kirienko <pavel@opencyphal.org>
 
 #include "cy.h"
-#include "_cy_cavl.h"
 
-#define RAPIDHASH_COMPACT  // because we hash strings <96 bytes long
-#include "rapidhash.h"
+#define CAVL2_RELATION int32_t
+#define CAVL2_T        struct cy_tree_t
+#include <cavl2.h>
+
+#define RAPIDHASH_COMPACT // because we hash strings <96 bytes long
+#include <rapidhash.h>
 
 #include <assert.h>
 #include <string.h>
@@ -117,10 +120,10 @@ static bool compose_topic_name(const char* const ns,
 
 // ----------------------------------------  AVL TREE UTILITIES  ----------------------------------------
 
-static int8_t cavl_predicate_topic_hash_raw(void* const user_reference, const struct cy_tree_t* const node)
+static int32_t cavl_comp_topic_hash(const void* const user, const struct cy_tree_t* const node)
 {
-    assert((user_reference != NULL) && (node != NULL));
-    const uint64_t                 outer = *(uint64_t*)user_reference;
+    assert((user != NULL) && (node != NULL));
+    const uint64_t                 outer = *(uint64_t*)user;
     const struct cy_topic_t* const inner = (const struct cy_topic_t*)node;
     if (outer == inner->hash) {
         return 0;
@@ -128,55 +131,31 @@ static int8_t cavl_predicate_topic_hash_raw(void* const user_reference, const st
     return (outer >= inner->hash) ? +1 : -1;
 }
 
-static int8_t cavl_predicate_topic_hash(void* const user_reference, const struct cy_tree_t* const node)
+static int32_t cavl_comp_topic_subject_id(const void* const user, const struct cy_tree_t* const node)
 {
-    assert((user_reference != NULL) && (node != NULL));
-    return cavl_predicate_topic_hash_raw(&(((struct cy_topic_t*)user_reference)->hash), node);
-}
-
-static struct cy_tree_t* cavl_factory_topic_hash(void* const user_reference)
-{
-    return &((struct cy_topic_t*)user_reference)->index_hash;
-}
-
-static int8_t cavl_predicate_topic_subject_id_raw(void* const user_reference, const struct cy_tree_t* const node)
-{
-    assert((user_reference != NULL) && (node != NULL));
-    const uint16_t                 outer = *(uint16_t*)user_reference;
+    assert((user != NULL) && (node != NULL));
     const struct cy_topic_t* const inner =
       (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_subject_id));
-    const uint16_t x = cy_topic_get_subject_id(inner);
-    if (outer == x) {
-        return 0;
-    }
-    return (outer >= x) ? +1 : -1;
+    return (int32_t)(*(uint16_t*)user) - ((int32_t)cy_topic_get_subject_id(inner));
 }
 
-static int8_t cavl_predicate_topic_subject_id(void* const user_reference, const struct cy_tree_t* const node)
+/// Gossip times are not unique, so this comparator never returns 0.
+static int32_t cavl_comp_topic_gossip_time(const void* const user, const struct cy_tree_t* const node)
 {
-    assert((user_reference != NULL) && (node != NULL));
-    uint16_t x = cy_topic_get_subject_id((struct cy_topic_t*)user_reference);
-    return cavl_predicate_topic_subject_id_raw(&x, node);
-}
-
-static struct cy_tree_t* cavl_factory_topic_subject_id(void* const user_reference)
-{
-    return &((struct cy_topic_t*)user_reference)->index_subject_id;
-}
-
-/// Gossip times do not have to be unique, so this comparator never returns 0.
-static int8_t cavl_predicate_topic_gossip_time(void* const user_reference, const struct cy_tree_t* const node)
-{
-    assert((user_reference != NULL) && (node != NULL));
-    const struct cy_topic_t* const outer = (struct cy_topic_t*)user_reference;
+    assert((user != NULL) && (node != NULL));
     const struct cy_topic_t* const inner =
       (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_gossip_time));
-    return (outer->last_gossip >= inner->last_gossip) ? +1 : -1;
+    return ((*(cy_us_t*)user) >= inner->last_gossip) ? +1 : -1;
 }
 
-static struct cy_tree_t* cavl_factory_topic_gossip_time(void* const user_reference)
+static struct cy_tree_t* cavl_factory_topic_subject_id(void* const user)
 {
-    return &((struct cy_topic_t*)user_reference)->index_gossip_time;
+    return &((struct cy_topic_t*)user)->index_subject_id;
+}
+
+static struct cy_tree_t* cavl_factory_topic_gossip_time(void* const user)
+{
+    return &((struct cy_topic_t*)user)->index_gossip_time;
 }
 
 // ----------------------------------------  NODE ID ALLOCATION  ----------------------------------------
@@ -281,10 +260,13 @@ static bool left_wins(const struct cy_topic_t* const left, const uint64_t r_age,
 static void update_last_gossip_time(struct cy_topic_t* const topic, const cy_us_t ts)
 {
     assert(topic->cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
-    cavlRemove(&topic->cy->topics_by_gossip_time, &topic->index_gossip_time);
+    cavl2_remove(&topic->cy->topics_by_gossip_time, &topic->index_gossip_time);
     topic->last_gossip                 = ts;
-    const struct cy_tree_t* const tree = cavlSearch(
-      &topic->cy->topics_by_gossip_time, topic, cavl_predicate_topic_gossip_time, cavl_factory_topic_gossip_time);
+    const struct cy_tree_t* const tree = cavl2_find_or_insert(&topic->cy->topics_by_gossip_time, //
+                                                              &ts,
+                                                              cavl_comp_topic_gossip_time,
+                                                              topic,
+                                                              cavl_factory_topic_gossip_time);
     assert(tree == &topic->index_gossip_time);
 }
 
@@ -392,7 +374,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_ev
 
     // We're not allowed to alter the eviction counter as long as the topic remains in the tree! So we remove it first.
     if (!virgin) {
-        cavlRemove(&cy->topics_by_subject_id, &topic->index_subject_id);
+        cavl2_remove(&cy->topics_by_subject_id, &topic->index_subject_id);
     }
 
     // Find a free slot. Every time we find an occupied slot, we have to arbitrate against its current tenant.
@@ -403,10 +385,9 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_ev
     while (true) {
         assert(iter_count <= cy->topic_count);
         iter_count++;
-        struct cy_tree_t* const t = cavlSearch(&cy->topics_by_subject_id, //
-                                               topic,
-                                               &cavl_predicate_topic_subject_id,
-                                               &cavl_factory_topic_subject_id);
+        const uint16_t          sid = topic_get_subject_id(topic->hash, topic->evictions);
+        struct cy_tree_t* const t   = cavl2_find_or_insert(
+          &cy->topics_by_subject_id, &sid, &cavl_comp_topic_subject_id, topic, &cavl_factory_topic_subject_id);
         assert(t != NULL); // we will create it if not found, meaning allocation succeeded
         if (t == &topic->index_subject_id) {
             break; // Done!
@@ -414,8 +395,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_ev
         // Someone else is sitting on that subject-ID. We need to arbitrate.
         struct cy_topic_t* const other = (struct cy_topic_t*)((char*)t - offsetof(struct cy_topic_t, index_subject_id));
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
-        const bool win = left_wins(topic, other->age, other->hash);
-        if (win) {
+        if (left_wins(topic, other->age, other->hash)) {
             // This is our slot now! The other topic has to move.
             // This can trigger a chain reaction that in the worst case can leave no topic unturned.
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
@@ -795,7 +775,7 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
     }
 
     // Find the next topic to gossip.
-    const struct cy_tree_t* const t = cavlFindExtremum(cy->topics_by_gossip_time, false);
+    const struct cy_tree_t* const t = cavl2_min(cy->topics_by_gossip_time);
     assert(t != NULL); // We always have at least the heartbeat topic.
     struct cy_topic_t* const tp = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
     assert(tp->cy == cy);
@@ -894,7 +874,7 @@ bool cy_topic_new(struct cy_t* const                  cy,
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.
     const struct cy_tree_t* const res_tree =
-      cavlSearch(&cy->topics_by_hash, topic, &cavl_predicate_topic_hash, &cavl_factory_topic_hash);
+      cavl2_find_or_insert(&cy->topics_by_hash, &topic->hash, &cavl_comp_topic_hash, topic, &cavl2_trivial_factory);
     assert(res_tree != NULL);
     if (res_tree != &topic->index_hash) { // Reject if the name is already taken.
         goto hell;
@@ -902,8 +882,11 @@ bool cy_topic_new(struct cy_t* const                  cy,
 
     // Ensure the topic is in the gossip index. This is needed for allocation.
     topic->last_gossip = 0;
-    (void)cavlSearch(
-      &cy->topics_by_gossip_time, topic, &cavl_predicate_topic_gossip_time, &cavl_factory_topic_gossip_time);
+    (void)cavl2_find_or_insert(&cy->topics_by_gossip_time,
+                               &topic->last_gossip,
+                               &cavl_comp_topic_gossip_time,
+                               topic,
+                               &cavl_factory_topic_gossip_time);
 
     // Allocate a subject-ID for the topic and insert it into the subject index tree.
     // Pinned topics all have canonical names, and we have already ascertained that the name is unique,
@@ -938,8 +921,7 @@ struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* cons
 struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash)
 {
     assert(cy != NULL);
-    struct cy_topic_t* const topic =
-      (struct cy_topic_t*)cavlSearch(&cy->topics_by_hash, &hash, &cavl_predicate_topic_hash_raw, NULL);
+    struct cy_topic_t* const topic = (struct cy_topic_t*)cavl2_find(&cy->topics_by_hash, &hash, &cavl_comp_topic_hash);
     if (topic == NULL) {
         return NULL;
     }
@@ -948,11 +930,10 @@ struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash)
     return topic;
 }
 
-struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, uint16_t subject_id)
+struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, const uint16_t subject_id)
 {
     assert(cy != NULL);
-    struct cy_tree_t* const t =
-      cavlSearch(&cy->topics_by_subject_id, &subject_id, &cavl_predicate_topic_subject_id_raw, NULL);
+    struct cy_tree_t* const t = cavl2_find(&cy->topics_by_subject_id, &subject_id, &cavl_comp_topic_subject_id);
     if (t == NULL) {
         return NULL;
     }

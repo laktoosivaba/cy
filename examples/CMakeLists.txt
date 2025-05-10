@@ -15,6 +15,8 @@ add_compile_definitions(
         CY_CONFIG_PREFERRED_TOPIC_OVERRIDE=0
 )
 
+include_directories(${CMAKE_SOURCE_DIR}/lib)
+
 # Cy static library.
 add_library(cy STATIC ${CMAKE_SOURCE_DIR}/cy/cy.c)
 target_include_directories(cy INTERFACE ${CMAKE_SOURCE_DIR}/cy)
