@@ -2,6 +2,8 @@
 
 #include "cy.h"
 #include "_cy_cavl.h"
+
+#define RAPIDHASH_COMPACT  // because we hash strings <96 bytes long
 #include "rapidhash.h"
 
 #include <assert.h>

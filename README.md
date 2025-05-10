@@ -18,6 +18,7 @@ The basic requirements are as follows:
 Stretch goals:
 
 - Support subscriptions with wildcard topic name matching / name substitution. See <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
+- Optional reliable transfers with ack/retry
 
 ## TL;DR
 
@@ -107,7 +108,7 @@ Assuming perfect hashing (this is a ~sensible assumption for Rapidhash but an ov
 
 It is essential to ensure that existing topics are not affected by new ones. To this end, each topic bears an age counter, which defines the priority of the topic during arbitration. The age counter should increase with time and usage of the topic. Currently, it is incremented whenever the topic is gossiped, and whenever a transfer is received (sic!) on the topic. Publishing a transfer does not increase the age because the publisher may be unconnected to subscribers. The age counter is CRDT-merged using siple max(), as a result, the counter grows faster as the number of nodes using the topic is increased.
 
-CRDTs only guarantee convergence when the system has been quiescent for a while, but the age counter is incremented continuously, meaning that its local replicas may normally be slightly different across nodes, which impairs convergence and may result in ping-pong topic reassignment. One possible solution is to slow down the counter such that it is not incremented faster than the new values may propagate through the network. This will work, but the optimal counting rate will depend on the number of topics (networks with more topics will converge slower so they prefer slower counters) and how often new topics join the network (networks that see much topic churn will prefer faster counters). A good solution could drive the counter faster while the topic is young, gradually slowing it down with age, such that the counter provide higher resolution for high-churn networks and at the same time reduce jitter over time in larger networks. One way to achieve that is to replace the raw age counter value with its $\log_2(\lfloor\text{age}\rfloor)$ during arbitration, assuming value -1 if the age is zero.
+CRDTs only guarantee convergence when the system has been quiescent for a while, but the age counter is incremented continuously, meaning that its local replicas may normally be slightly different across nodes, which impairs convergence and may result in ping-pong topic reassignment. One possible solution is to slow down the counter such that it is not incremented faster than the new values may propagate through the network. This will work, but the optimal counting rate will depend on the number of topics (networks with more topics will converge slower so they prefer slower counters) and how often new topics join the network (networks that see much topic churn will prefer faster counters). A good solution could drive the counter faster while the topic is young, gradually slowing it down with age, such that the counter provide higher resolution for high-churn networks and at the same time reduce jitter over time in larger networks. One way to achieve that is to replace the raw age counter value with its $\lfloor\log_2(\text{age})\rfloor$ during arbitration, assuming value -1 if the age is zero.
 
 Some networks will not tolerate the initial configuration stage while the protocol is working toward consensus, as this delay may be several seconds long in larger networks. To avoid this, nodes should ideally store the last stable subject-ID assignments in the non-volatile memory, such that they are able to resume normal operation immediately at next power-on without the need to wait for the network to converge again. Shall that configuration become obsolete (e.g., firmware update changes network configuration in other nodes), no issues are expected because the protocol will address divergences and collisions using its normal algorithm.
 
@@ -214,7 +215,7 @@ Find the topic by hash in the local node.
 
 If the topic is NOT found, find the topic by the allocated subject-ID (which is `(hash+evictions)%6144`) to check if there is a collision. If there is, do a CRDT merge (arbitration):
 - Pinned topic wins. Note that both cannot be pinned by design, because pinned topics have hash = subject-ID.
-- Otherwise, the topic with the greater $\log_2(\lfloor\text{age}\rfloor)$ wins.
+- Otherwise, the topic with the greater $\lfloor\log_2(\text{age})\rfloor$ wins.
 - Otherwise, the topic with the smaller hash wins.
 
 If the local topic lost, find another subject-ID for it. Regardless of the arbitration outcome, schedule the topic for gossip out-of-order next to resolve the conflict sooner (if we won) or to inform other nodes that we have moved, because other members of our topic could have settled on a different subject-ID and becase we could have collided with a different topic, since no node stores the full set. It may take several iterations until we settle on a new subject-ID. Each iteration requires resubscription to a new ID, which implies the possibility of data loss because the members of our topic may not switch fully synchronously (although we mitigate that risk somewhat by scheduling next gossip out of order). This is why it is essential that old topics win arbitration, so that newcomers do not disturb the network.
@@ -243,7 +244,11 @@ From an integrator standpoint, the only difference is that topics are now assign
 ### RPC endpoints
 
 These are much easier since they require no consensus -- each node does its own allocations locally.
-To avoid data corruption on sudden node-ID reassignment, the transfer should include either the destination UID or its hash.
+To avoid data corruption on sudden node-ID reassignment, the transfer should include the endpoint discriminator, similar to the topic discriminator.
+
+Ideally, out-of-order heartbeats should be allowed to enable faster RPC endpoint queries. When a client desires to invoke an RPC query, it will have to learn which node is providing it and under what service-ID. To speed up the discovery, a query is published, similarly to ARP. Then not just the server but all other clients that happen to know this endpoint will respond.
+
+Ideally, servers should always allocate a given endpoint to the same service-ID to minimize variability across reboots. It is up to the server to decide how the service-IDs are allocated, but ideally it could be also a hash of the endpoint name: `rapidhash(endpoint_name) & 0xFF`, incremented in case of a local collision.
 
 It should be noted that named RPC endpoints are indeed very different in their usage semantics compared to the old numerical endpoints. One practical consequence is that it is now possible to embed the name of the addressed resource, whatever it may be (file, register, command, etc.) directly into the RPC endpoint name. This could be leveraged to great advantage to, for example, replace the old register API with dedicated endpoints, where the "register" name and type are parts of the RPC endpoint name, and the data type is simply:
 
@@ -253,7 +258,9 @@ byte[<=256] write
 byte[<=256] read
 ```
 
-Such named services can then be used to configure the topics as well. For example, a local topic named `foo` could be remapped via an RPC endpoint `~/cyphal/foo` (or `~_/foo`, since we prefer shorter names to reduce gossip traffic), which is to contain the string topic name. Similar approaches could be used for topic introspection; for example, we could expose the topic type name via `~_/foo/t`.
+Such named services can then be used to configure the topics as well. For example, a local topic named `foo` could be remapped via an RPC endpoint `~/cyphal/foo?` (or `~_/foo?`, since we prefer shorter names to reduce gossip traffic), which is to contain the string topic name. Similar approaches could be used for topic introspection; for example, we could expose the topic type name via `~_/foo/t?`. One possible issue with this is that it is too easy to exhaust the small service-ID space of only 256 items; also, a large number of endpoints will make their discovery slow, since we announce at most one per heartbeat.
+
+If the sender happens to know the node-ID of the server from other sources (e.g., deduced from another transfer), then it is desirable to eliminate the service-ID mapping uncertainty completely (it will also save memory on the server because every service port requires some state to keep at the transport layer). In that case, the service-ID could be constant for all named endpoints (say 511) and the RPC request payload would be prepended with the full 64-bit endpoint hash. There is, strictly speaking, no need to prepend the hash to the response since it can be matched using the transfer-ID, but it could be useful as an additional correctness check.
 
 ### Wildcard topic subscriptions
 
