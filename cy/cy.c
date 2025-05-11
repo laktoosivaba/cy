@@ -134,8 +134,7 @@ static int32_t cavl_comp_topic_hash(const void* const user, const struct cy_tree
 static int32_t cavl_comp_topic_subject_id(const void* const user, const struct cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const struct cy_topic_t* const inner =
-      (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_subject_id));
+    const struct cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_subject_id);
     return (int32_t)(*(uint16_t*)user) - ((int32_t)cy_topic_get_subject_id(inner));
 }
 
@@ -143,8 +142,7 @@ static int32_t cavl_comp_topic_subject_id(const void* const user, const struct c
 static int32_t cavl_comp_topic_gossip_time(const void* const user, const struct cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const struct cy_topic_t* const inner =
-      (const struct cy_topic_t*)(((const char*)node) - offsetof(struct cy_topic_t, index_gossip_time));
+    const struct cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_gossip_time);
     return ((*(cy_us_t*)user) >= inner->last_gossip) ? +1 : -1;
 }
 
@@ -393,7 +391,7 @@ static void allocate_topic(struct cy_topic_t* const topic, const uint64_t new_ev
             break; // Done!
         }
         // Someone else is sitting on that subject-ID. We need to arbitrate.
-        struct cy_topic_t* const other = (struct cy_topic_t*)((char*)t - offsetof(struct cy_topic_t, index_subject_id));
+        struct cy_topic_t* const other = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
         if (left_wins(topic, other->age, other->hash)) {
             // This is our slot now! The other topic has to move.
@@ -777,7 +775,7 @@ cy_err_t cy_heartbeat(struct cy_t* const cy)
     // Find the next topic to gossip.
     const struct cy_tree_t* const t = cavl2_min(cy->topics_by_gossip_time);
     assert(t != NULL); // We always have at least the heartbeat topic.
-    struct cy_topic_t* const tp = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_gossip_time));
+    struct cy_topic_t* const tp = CAVL2_TO_OWNER(t, struct cy_topic_t, index_gossip_time);
     assert(tp->cy == cy);
 
     // Publish the heartbeat.
@@ -918,10 +916,10 @@ struct cy_topic_t* cy_topic_find_by_name(struct cy_t* const cy, const char* cons
     return cy_topic_find_by_hash(cy, topic_hash(strlen(name), name));
 }
 
-struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash)
+struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, const uint64_t hash)
 {
     assert(cy != NULL);
-    struct cy_topic_t* const topic = (struct cy_topic_t*)cavl2_find(&cy->topics_by_hash, &hash, &cavl_comp_topic_hash);
+    struct cy_topic_t* const topic = (struct cy_topic_t*)cavl2_find(cy->topics_by_hash, &hash, &cavl_comp_topic_hash);
     if (topic == NULL) {
         return NULL;
     }
@@ -933,11 +931,11 @@ struct cy_topic_t* cy_topic_find_by_hash(struct cy_t* const cy, uint64_t hash)
 struct cy_topic_t* cy_topic_find_by_subject_id(struct cy_t* const cy, const uint16_t subject_id)
 {
     assert(cy != NULL);
-    struct cy_tree_t* const t = cavl2_find(&cy->topics_by_subject_id, &subject_id, &cavl_comp_topic_subject_id);
+    struct cy_tree_t* const t = cavl2_find(cy->topics_by_subject_id, &subject_id, &cavl_comp_topic_subject_id);
     if (t == NULL) {
         return NULL;
     }
-    struct cy_topic_t* topic = (struct cy_topic_t*)(((char*)t) - offsetof(struct cy_topic_t, index_subject_id));
+    struct cy_topic_t* topic = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
     assert(cy_topic_get_subject_id(topic) == subject_id);
     assert(topic->cy == cy);
     return topic;
