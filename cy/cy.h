@@ -485,9 +485,9 @@ void cy_ingest_topic_response_transfer(struct cy_t* const              cy,
                                        const struct cy_transfer_meta_t metadata,
                                        const struct cy_payload_t       payload);
 
-/// This function must be invoked periodically to let the library publish heartbeats.
+/// This function must be invoked periodically to let the library publish heartbeats and handle response timeouts.
 /// The invocation period MUST NOT EXCEED the heartbeat period configured in cy_t; there is no lower limit.
-/// To avoid frequency aliasing, one may prefer to invoke it at any higher rate; a few ms is good.
+/// The recommended invocation period is less than 10 milliseconds.
 ///
 /// This is the only function that generates heartbeat --- the only kind of auxiliary traffic needed to support
 /// named topics. The returned value indicates the success of the heartbeat publication, if any took place, or zero.
