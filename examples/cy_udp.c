@@ -294,6 +294,7 @@ cy_err_t cy_udp_new(struct cy_udp_t* const cy_udp,
     for (uint_fast8_t i = 0; (i < CY_UDP_IFACE_COUNT_MAX) && (res >= 0); i++) {
         cy_udp->local_iface_address[i] = 0;
         cy_udp->tx[i].sock.fd          = -1;
+        cy_udp->rpc_rx[i].sock.fd      = -1;
         res                            = (cy_err_t)udpardTxInit(
           &cy_udp->tx[i].udpard_tx, &cy_udp->base.node_id, tx_queue_capacity_per_iface, cy_udp->mem);
     }
@@ -494,7 +495,7 @@ static void read_socket(struct cy_udp_t* const       cy_udp,
     // Alternatively, it could be an optional out-parameter of udpardRxSubscriptionReceive()?
     {
         const uint16_t src_nid = (uint16_t)(((const uint8_t*)dgram.data)[2] | //
-                                            (((uint16_t)((const uint8_t*)dgram.data)[3]) << 8U));
+                                            (((uint32_t)((const uint8_t*)dgram.data)[3]) << 8U));
         if ((src_nid <= UDPARD_NODE_ID_MAX) && (src_nid == cy_udp->base.node_id)) {
             cy_notify_node_id_collision(&cy_udp->base);
         }
@@ -550,7 +551,7 @@ static cy_err_t spin_once_until(struct cy_udp_t* const cy_udp, const cy_us_t dea
     }
     // Add the RPC RX sockets.
     for (uint_fast8_t i = 0; i < CY_UDP_IFACE_COUNT_MAX; i++) {
-        if (is_valid_ip(cy_udp->local_iface_address[i])) {
+        if (is_valid_ip(cy_udp->local_iface_address[i]) && (cy_udp->rpc_rx[i].sock.fd >= 0)) {
             rx_await[rx_count]         = &cy_udp->rpc_rx[i].sock;
             rx_topics[rx_count]        = NULL; // No topic associated with this socket.
             rx_iface_indexes[rx_count] = i;

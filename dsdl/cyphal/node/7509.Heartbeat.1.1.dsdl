@@ -38,7 +38,7 @@ UID.0.1 uid
 uint64 topic_hash
 # The topic hash is computed as:
 #
-# - If the key names a pinned topic, which means it matches `^/([1-9][0-9]{0,4})$`, where the capture group
+# - If the key names a pinned topic, which means it matches `^([1-9][0-9]{0,4})$`, where the capture group
 #   is the pinned subject-ID, then the hash is simply the pinned subject-ID. Pinned topic names always have the
 #   canonical form, which can be seen from the pattern, meaning that for any subject-ID there is exactly one
 #   pinned topic name encoding it.
@@ -71,5 +71,11 @@ void16
 uint8 TOPIC_NAME_MAX = 96
 utf8[<=TOPIC_NAME_MAX] topic_name
 # On CAN FD, topic names should not be longer than 23 bytes to avoid multi-frame heartbeats.
+# A valid name:
+# - is not empty;
+# - does not contain the null character;
+# - does neither start nor end with /;
+# - does not contain consecutive /.
+# Implementation library APIs may impose additional restrictions and introduce new special characters.
 
 @extent 300 * 8

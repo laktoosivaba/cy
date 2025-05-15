@@ -51,7 +51,7 @@ static size_t popcount_all(const size_t nbits, const void* x)
 }
 #endif
 
-static _Thread_local uint64_t g_prng_state;
+static _Thread_local uint64_t g_prng_state; // NOLINT(*-avoid-non-const-global-variables)
 
 /// The limits are inclusive. Returns min unless min < max.
 static uint64_t random_uint(const uint64_t min, const uint64_t max)
@@ -65,12 +65,6 @@ static uint64_t random_uint(const uint64_t min, const uint64_t max)
 }
 
 // ----------------------------------------  NAMES  ----------------------------------------
-
-/// Follows DDS rules for topic names.
-static bool is_identifier_char(const char c)
-{
-    return ((c >= '0') && (c <= '9')) || ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || (c == '_');
-}
 
 /// TODO this is ugly and dirty
 static bool compose_topic_name(const char* const ns,
@@ -87,13 +81,13 @@ static bool compose_topic_name(const char* const ns,
     if (*in != '/') {
         const bool is_user = (*in == '~') || (*ns == '~');
         in += *in == '~';
-        snprintf(tmp, sizeof(tmp), "/%s/%s", is_user ? user : ns, in);
+        (void)snprintf(tmp, sizeof(tmp), "%s/%s", is_user ? user : ns, in);
     } else {
-        snprintf(tmp, sizeof(tmp), "%s", in);
+        (void)snprintf(tmp, sizeof(tmp), "%s", in);
     }
     // validate and canonicalize
     in         = tmp;
-    char  prev = '\0';
+    char  prev = '/'; // remove leading slashes
     char* out  = destination;
     while (*in != '\0') {
         if ((in - tmp) > CY_TOPIC_NAME_MAX) {
@@ -104,15 +98,13 @@ static bool compose_topic_name(const char* const ns,
             if (prev != '/') {
                 *out++ = c;
             }
-        } else if (is_identifier_char(c)) {
-            *out++ = c;
         } else {
-            return 0; // invalid character
+            *out++ = c; // no such thing as invalid char, we accept everything at this level except multiple /.
         }
         prev = c;
     }
-    if (prev == '/') {
-        out--;
+    if ((prev == '/') && (out != destination)) {
+        out--; // remove trailing slash
     }
     *out = '\0';
     return true;
@@ -321,11 +313,7 @@ static void schedule_gossip_asap(struct cy_topic_t* const topic)
 /// The only requirement to ensure this is that there must be no leading zeros in the number.
 static uint16_t parse_pinned(const char* s)
 {
-    if ((s == NULL) || (*s != '/')) {
-        return CY_SUBJECT_ID_INVALID;
-    }
-    s++;
-    if ((*s == '\0') || (*s == '0')) { // Leading zeroes not allowed; only canonical form is accepted.
+    if ((s == NULL) || (*s == '\0') || (*s == '0')) { // Leading zeroes not allowed; only canonical form is accepted.
         return CY_SUBJECT_ID_INVALID;
     }
     uint32_t out = 0U;
@@ -709,27 +697,21 @@ cy_err_t cy_new(struct cy_t* const             cy,
     cy->node_id     = (node_id <= node_id_max) ? node_id : CY_NODE_ID_INVALID;
     cy->node_id_max = node_id_max;
     // namespace
-    if (namespace_ != NULL) {
-        const char* in = namespace_;
-        size_t      i  = 0; // hack for now: just replace invalid characters
-        for (; i < CY_NAMESPACE_NAME_MAX; i++) {
-            const char c = *in++;
-            if (is_identifier_char(c) || (c == '/') || ((c == '~') && (i == 0))) {
-                cy->namespace_[i] = c;
-            }
-        }
-        cy->namespace_[i] = '\0';
+    if ((namespace_ != NULL) && (namespace_[0] != '\0')) {
+        const size_t len = smaller(CY_NAMESPACE_NAME_MAX, strlen(namespace_));
+        memcpy(cy->namespace_, namespace_, len);
+        cy->namespace_[len] = '\0';
     } else {
         cy->namespace_[0] = '/'; // default namespace
         cy->namespace_[1] = '\0';
     }
     // the default name is just derived from UID, can be overridden by the user later
-    snprintf(cy->name,
-             sizeof(cy->name),
-             "/%04x/%04x/%08lx/",
-             (unsigned)(uid >> 48U) & UINT16_MAX,
-             (unsigned)(uid >> 32U) & UINT16_MAX,
-             (unsigned long)(uid & UINT32_MAX));
+    (void)snprintf(cy->name,
+                   sizeof(cy->name),
+                   "%04x/%04x/%08lx/",
+                   (unsigned)(uid >> 48U) & UINT16_MAX,
+                   (unsigned)(uid >> 32U) & UINT16_MAX,
+                   (unsigned long)(uid & UINT32_MAX));
     cy->user                  = NULL;
     cy->now                   = now;
     cy->transport             = transport_io;
@@ -966,7 +948,7 @@ bool cy_topic_new(struct cy_t* const                  cy,
     topic->sub_list        = NULL;
     topic->subscribed      = false;
 
-    if ((topic->name_length == 0) || (topic->name_length > CY_TOPIC_NAME_MAX) || (topic->name[0] != '/') ||
+    if ((topic->name_length == 0) || (topic->name_length > CY_TOPIC_NAME_MAX) ||
         (cy->topic_count >= CY_TOPIC_SUBJECT_COUNT)) {
         goto hell;
     }

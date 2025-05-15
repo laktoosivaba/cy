@@ -64,8 +64,6 @@ extern "C"
 ///
 /// If a conflict is found, the current node-ID is reallocated regardless of whether it's been given explicitly or
 /// allocated automatically.
-///
-/// TODO this goes to the transport layer; see below why.
 #define CY_START_DELAY_MIN_us 1000000L
 #define CY_START_DELAY_MAX_us 3000000L
 
@@ -124,7 +122,6 @@ struct cy_tree_t
 };
 
 /// An ordinary Bloom filter with 64-bit words.
-/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 struct cy_bloom64_t
 {
     size_t    n_bits; ///< The total number of bits in the filter, a multiple of 64.
@@ -146,7 +143,6 @@ typedef cy_us_t (*cy_now_t)(const struct cy_t*);
 /// or after some time from cy_heartbeat() when one is allocated automatically.
 /// When this function is invoked, cy_t contains a valid node-ID.
 /// Cy guarantees that this function will not be invoked unless the node-ID is currently unset.
-/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 typedef cy_err_t (*cy_transport_set_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport to abandon the current node-ID. Notice that this function is infallible.
@@ -155,7 +151,6 @@ typedef cy_err_t (*cy_transport_set_node_id_t)(struct cy_t*);
 /// one solution is to simply restart the node.
 /// It is recommended to purge the tx queue to avoid further collisions.
 /// Cy guarantees that this function will not be invoked unless the node-ID is currently set.
-/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 typedef void (*cy_transport_clear_node_id_t)(struct cy_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
@@ -290,8 +285,6 @@ struct cy_topic_t
     /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
     /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
     /// node using this topic has joined and had to catch up.
-    ///
-    /// TODO this is currently not implemented; simply update it from on_heartbeat.
     cy_us_t last_event_ts;
 
     /// Time when this topic last had to be locally moved to another subject-ID due to a conflict
@@ -301,8 +294,6 @@ struct cy_topic_t
     ///
     /// The purpose of this timestamp is to provide the local application with a topic stability metric:
     /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
-    ///
-    /// TODO this is currently not implemented; simply update it from on_heartbeat.
     cy_us_t last_local_event_ts;
 
     /// The user can use this field for arbitrary purposes.
@@ -370,7 +361,6 @@ struct cy_t
     /// A filter composed of 64x64-bit words can support up to 4096 auto-allocated nodes per network, which is a safe
     /// choice for most Cyphal networks.
     /// For Cyphal/CAN, a single 64-bit word is sufficient, since CAN networks with >64 nodes are exceedingly rare.
-    /// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
     struct cy_bloom64_t node_id_bloom;
 
     /// The user can use this field for arbitrary purposes.
@@ -390,8 +380,6 @@ struct cy_t
     /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
     /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
     /// node using any of our topics has joined and had to catch up.
-    ///
-    /// TODO this is currently not implemented; simply update it from on_heartbeat.
     cy_us_t last_event_ts;
 
     /// Time when any of the local topics last had to be locally moved to another subject-ID due to a conflict
@@ -401,8 +389,6 @@ struct cy_t
     ///
     /// The purpose of this timestamp is to provide the local application with a network stability metric:
     /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
-    ///
-    /// TODO this is currently not implemented; simply update it from on_heartbeat.
     cy_us_t last_local_event_ts;
 
     cy_now_t                 now;
@@ -433,14 +419,12 @@ struct cy_t
 /// autoconfiguration process, where a node will make sure to avoid conflicts at the beginning to avoid disturbing
 /// the network; the rationale is that a manually assigned node-ID takes precedence over the auto-assigned one,
 /// thus forcing any squatters out of the way.
-/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 ///
 /// The node-ID occupancy Bloom filter is used to track the occupancy of the node-ID space. The filter must be at least
 /// a single 64-bit word long. The number of bits in the filter (64 times the word count) defines the maximum number
 /// of nodes present in the network while the local node is still guaranteed to be able to auto-configure its own ID
 /// without collisions. The recommended parameters are two 64-bit words for CAN networks (takes 16 bytes) and
 /// 64~128 words (512~1024 bytes) for all other transports.
-/// TODO: this is part of the node-ID autoconfiguration protocol and it should be moved to lib*ards.
 ///
 /// The namespace may be NULL or empty, in which case it defaults to `/`. It may begin with `~`, which expands into UID.
 ///
@@ -520,14 +504,6 @@ void cy_notify_discriminator_collision(struct cy_topic_t* const topic);
 /// Note that the node-ID collision checks must be done on raw transport frames, not on reassembled transfers, for
 /// two reasons: 1. this is faster, allowing quick reaction; 2. in the presence of a node-ID conflict, transfers
 /// arriving from that ID cannot be robustly reassembled.
-///
-/// TODO FIXME MOVE THIS TO THE TRANSPORT LIBRARY INSTEAD! REASONS WHY:
-/// 1. This check operates at the frame level, not transfer level, which is too low for Cy; this is why we need this
-/// function as opposed to just handling things in cy_ingest.
-/// 2. The node-ID space and the optimal allocation strategy (Bloom filter size) are dependent on the transport layer!
-/// 3. HETEROGENEOUS REDUNDANT INTERFACES MAY HAVE TO USE DIFFERENT NODE-IDS, and attempting to allocate a shared one
-/// is at least inefficient, at most impossible!
-/// 4. With named topics in place, no entity above the transport layer cares about the node-ID value.
 void cy_notify_node_id_collision(struct cy_t* const cy);
 
 /// If a node-ID is given explicitly at startup, it will be used as-is and the node will become operational immediately.
