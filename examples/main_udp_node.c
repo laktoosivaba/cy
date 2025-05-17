@@ -5,7 +5,6 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
@@ -139,19 +138,19 @@ static struct config_t load_config(const int argc, char* argv[])
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static void on_msg_trace(struct cy_subscription_t* const subscription,
-                         const cy_us_t                   timestamp_us,
-                         const struct cy_transfer_meta_t metadata,
-                         const struct cy_payload_t       payload)
+static void on_msg_trace(struct cy_subscription_t* const subscription)
 {
-    // Convert payload to hex.
+    struct cy_transfer_owned_t* const transfer = &subscription->topic->sub_last_transfer;
+    CY_BUFFER_GATHER_ON_STACK(payload, transfer->payload.base)
+
+    // Convert linearized payload to hex.
     char hex[payload.size * 2 + 1];
     for (size_t i = 0; i < payload.size; i++) {
         sprintf(hex + i * 2, "%02x", ((const uint8_t*)payload.data)[i]);
     }
     hex[sizeof(hex) - 1] = '\0';
 
-    // Convert payload to ASCII.
+    // Convert linearized payload to ASCII.
     char ascii[payload.size + 1];
     for (size_t i = 0; i < payload.size; i++) {
         const char ch = ((const char*)payload.data)[i];
@@ -159,14 +158,19 @@ static void on_msg_trace(struct cy_subscription_t* const subscription,
     }
     ascii[payload.size] = '\0';
 
+    // Release the payload buffer memory.
+    // This memory comes all the way from the bottom layer of the stack with zero copying.
+    // If we don't release it now, it will be released only when the next message arrives, which is wasteful.
+    cy_buffer_owned_release(subscription->topic->cy, &transfer->payload);
+
     // Log the message.
     CY_TRACE(subscription->topic->cy,
              "💬 [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]:\n%s\n%s",
              cy_topic_get_subject_id(subscription->topic),
-             metadata.remote_node_id,
-             (unsigned long long)metadata.transfer_id,
+             transfer->metadata.remote_node_id,
+             (unsigned long long)transfer->metadata.transfer_id,
              payload.size,
-             (unsigned long long)timestamp_us,
+             (unsigned long long)transfer->timestamp,
              subscription->topic->name,
              (unsigned long long)subscription->topic->age,
              hex,
@@ -175,9 +179,9 @@ static void on_msg_trace(struct cy_subscription_t* const subscription,
     // Optionally, send a direct p2p response to the publisher of this message.
     if (cy_has_node_id(subscription->topic->cy) && ((rand() % 2) == 0)) {
         const cy_err_t err = cy_respond(subscription->topic, //
-                                        timestamp_us + 1000000,
-                                        metadata,
-                                        (struct cy_payload_t){ .data = ":3", .size = 2 });
+                                        transfer->timestamp + 1000000,
+                                        transfer->metadata,
+                                        (struct cy_buffer_borrowed_t){ .view = { .data = ":3", .size = 2 } });
         if (err < 0) {
             fprintf(stderr, "cy_respond: %d\n", err);
         }
@@ -189,7 +193,8 @@ static void on_response_trace(struct cy_response_future_t* const future)
 {
     struct cy_topic_t* topic = future->topic;
     if (future->state == cy_future_success) {
-        const struct cy_payload_t payload = future->response_payload;
+        struct cy_transfer_owned_t* const transfer = &future->last_response;
+        CY_BUFFER_GATHER_ON_STACK(payload, transfer->payload.base)
 
         // Convert payload to hex.
         char hex[payload.size * 2 + 1];
@@ -206,14 +211,19 @@ static void on_response_trace(struct cy_response_future_t* const future)
         }
         ascii[payload.size] = '\0';
 
+        // Release the payload buffer memory.
+        // This memory comes all the way from the bottom layer of the stack with zero copying.
+        // If we don't release it now, it will be released only when the next response arrives, which is wasteful.
+        cy_buffer_owned_release(topic->cy, &transfer->payload);
+
         // Log the response.
         CY_TRACE(topic->cy,
                  "↩️ [sid=%04x nid=%04x tid=%016llx sz=%06zu ts=%09llu] @ %s [age=%llu]:\n%s\n%s",
                  cy_topic_get_subject_id(topic),
-                 future->response_metadata.remote_node_id,
-                 (unsigned long long)future->response_metadata.transfer_id,
+                 transfer->metadata.remote_node_id,
+                 (unsigned long long)transfer->metadata.transfer_id,
                  payload.size,
-                 (unsigned long long)future->response_timestamp,
+                 (unsigned long long)transfer->timestamp,
                  topic->name,
                  (unsigned long long)topic->age,
                  hex,
@@ -295,11 +305,12 @@ int main(const int argc, char* argv[])
                             "Hello from %016llx! The current time is %lld us.",
                             (unsigned long long)cy_udp.base.uid,
                             (long long)now);
-                    const cy_err_t pub_res = cy_udp_publish(&topics[i], //
-                                                            now + 100000,
-                                                            (struct cy_payload_t){ .data = msg, .size = strlen(msg) },
-                                                            now + 1000000,
-                                                            &futures[i]);
+                    const cy_err_t pub_res =
+                      cy_udp_publish(&topics[i],
+                                     now + 100000,
+                                     (struct cy_buffer_borrowed_t){ .view = { .data = msg, .size = strlen(msg) } },
+                                     now + 1000000,
+                                     &futures[i]);
                     if (pub_res < 0) {
                         fprintf(stderr, "cy_udp_publish: %d\n", pub_res);
                         break;
@@ -307,69 +318,13 @@ int main(const int argc, char* argv[])
                 }
             }
             next_publish_at += 1000000U;
+
+            CY_TRACE(&cy_udp.base,
+                     "Heap: allocated %zu fragments, %llu OOMs",
+                     cy_udp.mem_allocated_fragments,
+                     (unsigned long long)cy_udp.mem_oom_count);
         }
     }
 
     return 0;
-}
-
-void cy_trace(struct cy_t* const  cy,
-              const char* const   file,
-              const uint_fast16_t line,
-              const char* const   func,
-              const char* const   format,
-              ...)
-{
-    // Capture the uptime timestamp ASAP.
-    const cy_us_t uptime_us = cy->now(cy) - cy->started_at;
-
-    // Get the current wall time and format it.
-    struct timespec ts;
-    (void)timespec_get(&ts, TIME_UTC);
-    const struct tm tm_local  = *localtime(&ts.tv_sec);
-    char            hhmmss[9] = { 0 };
-    (void)strftime(hhmmss, sizeof(hhmmss), "%H:%M:%S", &tm_local);
-
-    // Extract the file name.
-    const char* file_name = strrchr(file, '/');
-    if (file_name != NULL) {
-        file_name++;
-    } else if ((file_name = strrchr(file, '\\')) != NULL) {
-        file_name++;
-    } else {
-        file_name = file;
-    }
-
-    // Update the longest seen file name and function name.
-    static _Thread_local int longest_file_name = 10;
-    static _Thread_local int longest_func_name = 20;
-    const int                file_name_length  = (int)strlen(file_name);
-    const int                func_name_length  = (int)strlen(func);
-    longest_file_name = (longest_file_name > file_name_length) ? longest_file_name : file_name_length;
-    longest_func_name = (longest_func_name > func_name_length) ? longest_func_name : func_name_length;
-
-    // Print the header.
-    static const int32_t mega = 1000000;
-    fprintf(stderr,
-            "CY(%016llx %05lld.%06lld) %s.%03lld %*s:%04u:%*s: ",
-            (unsigned long long)cy->uid,
-            (long long)(uptime_us / mega),
-            (long long)(uptime_us % mega),
-            hhmmss,
-            (long long)ts.tv_nsec / mega,
-            longest_file_name,
-            file_name,
-            (unsigned)line,
-            longest_func_name,
-            func);
-
-    // Print the message.
-    va_list args;
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    va_end(args);
-
-    // Finalize.
-    fputc('\n', stderr);
-    fflush(stderr);
 }
