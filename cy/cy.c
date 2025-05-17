@@ -209,6 +209,10 @@ static void bloom64_purge(struct cy_bloom64_t* const bloom)
 /// and a nonce. Perhaps it could be simply SplitMix64 seeded with the UID?
 static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t node_id_max)
 {
+    // First, ensure we don't pick node-ID 126 and 127, as they have been historically reserved for diagnostic tools.
+    bloom64_set(bloom, 126);
+    bloom64_set(bloom, 127);
+
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
     // This somewhat undermines the randomness of the result, but it is always fast.
     const size_t num_words  = (smaller(node_id_max, bloom->n_bits) + 63U) / 64U;
