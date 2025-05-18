@@ -207,12 +207,17 @@ static void bloom64_purge(struct cy_bloom64_t* const bloom)
 ///
 /// In the future we could replace this with a deterministic algorithm that chooses the node-ID based on the UID
 /// and a nonce. Perhaps it could be simply SplitMix64 seeded with the UID?
+///
+/// The Spec says that node-ID 126 and 127 are reserved for diagnostic tools. We ignore this reservation here
+/// because there doesn't seem to be a good way to enforce it without degrading into a linear search,
+/// or increasing the complexity of the choosing algorithm significantly. The naive approach where we simply mark
+/// the corresponding Bloom filter entries as taken is too wasteful because it wipes out not only the reserved
+/// IDs, but all other IDs that map to the same Bloom filter bits. In CAN networks, the transport glue library can
+/// simply limit the node-ID allocation range to [0, 125], and thus ensure the reserved IDs are not used;
+/// all other transports that use much wider node-ID range (which is [0, 65534]) can just disregard the reservation
+/// because the likelihood of picking the reserved IDs is negligible, and the consequences of doing so are very minor.
 static uint16_t pick_node_id(struct cy_bloom64_t* const bloom, const uint16_t node_id_max)
 {
-    // First, ensure we don't pick node-ID 126 and 127, as they have been historically reserved for diagnostic tools.
-    bloom64_set(bloom, 126);
-    bloom64_set(bloom, 127);
-
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
     // This somewhat undermines the randomness of the result, but it is always fast.
     const size_t num_words  = (smaller(node_id_max, bloom->n_bits) + 63U) / 64U;
