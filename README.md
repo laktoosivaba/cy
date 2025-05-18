@@ -49,7 +49,7 @@ cy_err_t res = cy_udp_subscribe(&my_topic,
                                 &my_subscription,
                                 1024 * 1024,                       // extent (max message size)
                                 CY_TRANSFER_ID_TIMEOUT_DEFAULT_us, // going to remove this
-                                on_message_received_callback);
+                                on_message_received_callback);     // the callback is optional
 if (res < 0) { ... }
 
 // SPIN THE EVENT LOOP
@@ -295,6 +295,8 @@ This results in a robust hash (6144 subject-IDs times 2^16 in the user word time
 
 #### Cyphal/CAN
 
-The CAN ID format only offers two bits for the topic discriminator: 21 and 22. Other 16 bits will be used to seed the 16-bit transfer-CRC (the default initial value of CRC-16-CCITT-FALSE is already zero).
+The CAN ID format only offers two bits for the topic discriminator: 21 and 22. Other 16 bits will be used to seed the 16-bit transfer-CRC (the default initial value of CRC-16-CCITT-FALSE is already zero). This excludes single-frame CAN transfers, though.
 
 The collision detection capability of this scheme is poor as we only introduce 18 bits of hash, which means that named-topic networks based on CAN will not scale to large numbers of topics. Together with 6144 possible subject-ID values, the probability of an undetected discriminator collision given 40 topics (optimistically assuming perfect hashing, which is not accurate) is 4.8e-7, or one in two million. The actual probability is higher considering the limitations of CRC algorithms when used for hashing. Usage of this mechanism in larger CAN networks (more than about thirty-forty topics) is unsafe and requires changes to the CAN frame format.
+
+The above only applies to multi-frame transfers over CAN, since single-frame Cyphal/CAN transfers do not include the payload CRC, unlike the other transports. One quick and dirty solution to enable collision-safe named topics on CAN networks without nontrivial changes to the Cyphal/CAN layer is to pad the payload with zeroes such that it is at least 1 byte larger than the MTU (i.e., at least 8 bytes in Classic CAN networks, at least 64 bytes in CAN FD networks). Such zero padding is guaranteed to not alter the interpretation of the payload due to the implicit zero extension/truncation rules. This **does not affect pinned topics** since they are conflict-free by design; they can still remain unpadded and thus efficient.
