@@ -19,11 +19,11 @@ DYNAMIC_SUBJECT_COUNT = 6144
 
 def topic_hash(topic_name: str) -> int:
     try:
-        numeric = int(topic_name[1:])
+        numeric = int(topic_name)
     except ValueError:
         pass
     else:
-        if (0 <= numeric < SUBJECT_COUNT) and f"/{numeric}" == topic_name:  # Only accept canonical form.
+        if (0 <= numeric < SUBJECT_COUNT) and f"{numeric}" == topic_name:  # Only accept canonical form.
             return numeric
     return rapidhash(topic_name.encode())
 
@@ -59,8 +59,11 @@ def main() -> None:
         sys.exit(f"Usage: {sys.argv[0]} <text>")
     original = sys.argv[1]
 
-    twins = [find_subject_id_collision(original, max_suffix_len=6) for _ in range(50)]
-    twins = sorted(twins, key=lambda tw: len(tw["collision_name"]))
+    twins = {}
+    while len(twins) < 20:
+        c = find_subject_id_collision(original, max_suffix_len=6)
+        twins[c["collision_name"]] = c
+    twins = list(sorted(twins.values(), key=lambda tw: len(tw["collision_name"])))
 
     print(f"# \thash{' ':16s}\tname")
     for idx, tw in enumerate(twins):
