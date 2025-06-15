@@ -14,66 +14,88 @@ The basic requirements are as follows:
 - Once a stable configuration is found, it should be possible to store it in the non-volatile memory per node for instant recovery after power cycling, bypassing the autoconfiguration stage. Obsolete or incorrect per-node configuration should not affect the rest of the network. This ensures that a vehicular network with named topics will perform identically to a fully statically configured one until its configuration is changed.
 - Scalability beyond a thousand of nodes and topics per network.
 - The solution should be implementable in under 1k lines of C without dynamic memory or undue computing costs for small nodes.
+- Support subscriptions with wildcard topic name matching / name substitution. See <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
 
 Stretch goals:
 
-- Support subscriptions with wildcard topic name matching / name substitution. See <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
 - Optional reliable transfers with ack/retry
 
 ## TL;DR
 
 ```c
-// SET UP LOCAL NODE. This is the only platform-specific part.
-// The rest of the API is platform- and transport-agnostic, with the exception of the event loop spin functions.
+// SET UP LOCAL NODE.
+// The initial configuration is platform- and transport-specific, unlike the rest of the API.
 struct cy_udp_posix_t cy_udp_posix; // In this example we're running over Cyphal/UDP, this node runs on POSIX.
 cy_err_t res = cy_udp_posix_new(&cy_udp_posix,
                                 local_unique_id,  // 64-bit composed of VID+PID+IID
-                                "my_namespace",   // topic name prefix (defaults to nothing)
+                                "my_namespace",   // topic name prefix (defaults to the local node UID if empty)
                                 (uint32_t[3]){ udp_parse_iface_address("127.0.0.1") },
                                 1000);            // tx queue capacity per interface
-if (res < 0) { ... }
+if (res != CY_OK) { ... }
 
 // The rest of the API is platform- and transport-agnostic, except the event loop spinners.
 struct cy_t* const cy = &cy_udp_posix.base;
 
-// JOIN A TOPIC (to publish and/or subscribe).
+// CREATE PUBLISHERS.
 // To interface with an old node that does not support named topics, put the subject-ID into the topic name;
 // e.g., `/1234`. This will bypass the automatic subject-ID allocation and pin the topic as specified.
-struct cy_topic_t* const my_topic = cy_topic_new(cy, "my_topic");  // expands into "my_namespace/my_topic"
-if (res < 0) { ... }
+// The last argument is the extent of response messages sent back from the remote subscribers.
+// If no responses are needed or expected, set it to zero.
+// The "_c" suffix at the end of some functions indicates that the function accepts an ordinary C-string
+// instead of wkv_str_t that is used internally throughout.
+struct cy_publisher_t my_publisher;
+res = cy_advertise_c(cy, &my_publisher, "my_topic", 0);
+if (res != CY_OK) { ... }
 
-// SUBSCRIBE TO TOPIC (nothing needs to be done if we want to publish):
-struct cy_subscription_t my_subscription;
-res = cy_subscribe(my_topic,
-                   &my_subscription,
-                   1024 * 1024,                       // extent (max message size)
-                   on_message_received_callback);     // the callback is optional, we can also poll
-if (res < 0) { ... }
+// CREATE SUBSCRIBERS.
+// Subscribers can specify a verbatim topic name or a pattern. Pattern subscribers will actively discover
+// topics on the network whose names match the pattern, and automatically subscribe to them in the background.
+// There may be multiple local subscribers on the same topic.
+struct cy_subscriber_t verbatim_subscription;
+res = cy_subscribe_c(cy,
+                     &verbatim_subscription,
+                     "/other_namespace/my_topic",
+                     1024 * 1024,                   // extent (max message size)
+                     on_message_received_callback);
+if (res != CY_OK) { ... }
+
+// Multiple patterns may match the same topic. For example, "/?/def" and "/abc/*" both match "/abc/def".
+// The library does reference counting and routing internally so that each subscriber gets the relevant data
+// and topics remain alive as long as at least one subscriber (or publisher) is using it.
+struct cy_subscriber_t pattern_subscription;
+res = cy_subscribe_c(cy,
+                     &pattern_subscription,
+                     "/?/my_topic",                 // Will match any segment in place of '?'
+                     1024 * 1024,
+                     on_message_received_callback);
+if (res != CY_OK) { ... }
 
 // SPIN THE EVENT LOOP
 while (true) {
+    // SPIN THE EVENT LOOP.
+    // This part is also platform-specific, but the data API is purely platform- and transport-agnostic.
     const cy_err_t err_spin = cy_udp_posix_spin_once(&cy_udp_posix);
-    if (err_spin < 0) { ... }
+    if (err_spin != CY_OK) { ... }
 
     // PUBLISH MESSAGES (no need to do anything else unlike in the case of subscription)
     // Optionally we can check if the local node has a node-ID. It will automatically appear
     // if not given explicitly at startup in a few seconds; once appeared, it will always remain available,
     // but it may change if a collision is discovered (should never happen in a well-managed network).
-    if (cy_has_node_id(cy)) {
+    if (cy_joined(cy)) {
         char msg[256];
         sprintf(msg, "I am %016llx. time=%lld us", (unsigned long long)cy->uid, (long long)now);
         const struct cy_buffer_borrowed_t payload = { .view.data = msg, .view.size = strlen(msg) };
-        const cy_err_t pub_res = cy_udp_publish1(my_topic, now + 100000, payload);
-        if (pub_res < 0) { ... }
+        const cy_err_t pub_res = cy_udp_publish1(cy, &my_publisher, now + 100000, payload);
+        if (pub_res != CY_OK) { ... }
     }
 }
 ```
 
-Build-time dependencies:
+Build-time dependencies, all single-header-only:
 
-- [cavl2.h](https://github.com/pavel-kirienko/cavl)
-- [Rapidhash](https://github.com/Nicoshev/rapidhash) by Nicolas De Carli (BSD 2-clause license)
-- libudpard
+- [`cavl2.h`](https://github.com/pavel-kirienko/cavl) -- AVL tree.
+- [`wkv.h`](https://github.com/pavel-kirienko/wild_key_value) -- key-value container with fast pattern matching & routing.
+- [`rapidhash.h`](https://github.com/Nicoshev/rapidhash) -- a good 64-bit hash by Nicolas De Carli (BSD 2-clause license).
 
 ## Solution
 
@@ -81,13 +103,13 @@ Build-time dependencies:
 
 The new node-ID autoconfiguration protocol does not require an allocator; instead, a straightforward address claiming procedure is implemented:
 
-1. When joining the network without a node-ID preconfigured, the node will listen for a random time interval ca. 1~3 seconds. The source node-ID of each received transfer is marked as taken in a local bitmask. If the transport layer has a large node-ID space (which is the case for every transport except Cyphal/CAN), the bitmask is replaced with a Bloom filter, whose bit capacity defines the maximum number of nodes that can be autoconfigured in this way (e.g., a 512-byte Bloom filter allows allocating at least 4096 nodes).
+1. When joining the network without a node-ID preconfigured, the node will listen for a random time interval ca. 1~3 seconds. The source node-ID of each received transfer (heartbeats or whatever else may occur) is marked as taken in a local bitmask. If the transport layer has a large node-ID space (which is the case for every transport except Cyphal/CAN), the bitmask is replaced with a Bloom filter, whose bit capacity defines the maximum number of nodes that can be autoconfigured in this way (e.g., a 512-byte Bloom filter allows allocating at least 4096 nodes).
 
 2. When a new node is discovered, the listening time is extended by a random penalty ca. 0~1 seconds. This is to reduce the likelihood of multiple nodes claiming an address at the same time.
 
 3. Once the initial delay has expired, an unoccupied node-ID is chosen from the bitmask/Bloom filter and marked as used. The first heartbeat is published immediately to claim the address.
 
-If a node-ID conflict is discovered at any later point, even if the node-ID was configured manually, we reset the bitmask/Bloom filter, reset the local node-ID, and restart the process from scratch.
+If a node-ID conflict is discovered at any later point, even if the node-ID was configured manually, we repeat step 3 only; i.e., simply pick a new node-ID from the Bloom/mask. In case of high node churn the Bloom/mask will eventually become congested; when the congestion is imminent, the entire filter state is dropped and then gradually rebuilt from scratch in the background.
 
 This method is stateless and quite simple (~100 LoC to implement), and ensures that existing nodes are not disturbed by newcomers. However, it doesn't guarantee no-disturbance if the network is partitioned when new participants join; in that case, once the network is de-partitioned, collisions may occur. To mitigate that, the collision monitoring is done continuously, even if a node-ID is manually assigned, and nodes should save the node-ID, once allocated, into the non-volatile memory, such that a stable configuration, once discovered, remains stable, and nodes can bypass the autoconfiguration delay at boot unless joining the network for the first time.
 
@@ -101,13 +123,13 @@ For the purposes of the subject-ID allocation CRDT, the topic name is replaced w
 
 For a non-pinned topic, the subject-ID allocated to it equals `(hash+evictions)%6144`, where evictions is the number of times the topic had to be moved due to losing arbitration to a contender for the same subject-ID. As can be seen, dynamically assigned subject-IDs fall in the range [0,6144); the remaining range [6144, 8192) is reserved for pinned topics and fixed subject-IDs. It is possible to pin a topic at any subject-ID, not necessarily in the reserved range, but in the presence of nodes that do not support the named topic protocol pinning below 6144 is not recommended because old nodes will be unable to participate in conflict resolution.
 
-CRDTs are eventually convergent by design; thus, as long as nodes are able to communicate, eventually they will find a consistent (only one subject-ID per topic) and conflict-free (only one topic per subject-ID) configuration. While the network is still converging, however, brief conflicts will likely occur. To avoid data misinterpretation, transfers emitted over named topics are extended with a 51-bit *topic discriminator*, which itself is simply the 51 most significant bits of the topic hash (the 13 least significant bits are already used to compute the subject-ID and as such they are not usable for hashing).
+CRDTs are eventually convergent by design; thus, as long as nodes are able to communicate, eventually they will find a consistent (only one subject-ID per topic) and conflict-free (only one topic per subject-ID) configuration. While the network is still converging, however, brief conflicts will likely occur. To avoid data misinterpretation, transfers emitted over named topics are extended with at least some of the most significant bits of the topic hash (the 16 least significant bits of the topic hash are already used to compute the subject-ID and as such they are not usable for hashing, so we are left with 48 bits).
 
-How the topic discriminator is used depends on the specifics of the transport layer. At least a part of it should be used to populate a field in the transport frame header to allow quick acceptance filtering and detection when another topic is occupying our subject-ID. Another part can be used to seed the transfer-CRC. Observe that the topic discriminator is zero for a pinned topic, which ensures backward compatibility with any old node.
+How the topic hash is used at the transport layer depends on the specifics of the transport. At least a part of it should be used to populate a field in the transport frame header to allow quick acceptance filtering and detection when another topic is occupying our subject-ID. Another part can be used to seed the transfer-CRC. Observe that the most significant bits of the topic hash are zero for a pinned topic, which ensures backward compatibility with any v1.0 node.
 
-When receiving a transport frame, the transport layer will compare the topic discriminator (or relevant parts thereof) provided by the topic autoconfiguration protocol against the value in the received frame. If a divergence is found, the topic autoconfiguration engine is notified, such that it assigns a higher priority to resolving the conflict as soon as possible (this notification is not essential for the protocol to function, since the CRDT will eventually converge regardless, but it does speed up conflict resolution), and the frame is discarded. This is called stochastic multiple occupant monitoring, or *Stochastic MOM*.
+When receiving a transport frame, the transport layer will compare the relevant most significant bits of the topic hash provided by the topic autoconfiguration protocol against the value in the received frame. If a divergence is found, the topic autoconfiguration engine is notified, such that it assigns a higher priority to resolving the conflict as soon as possible (this notification is not essential for the protocol to function, since the CRDT will eventually converge regardless, but it does speed up conflict resolution), and the frame is discarded. This is called stochastic multiple occupant monitoring, or *Stochastic MOM*.
 
-Assuming perfect hashing (this is a ~sensible assumption for Rapidhash but an overly optimistic one for CRCs), the probability of Stochastic MOM failure -- i.e., data misinterpretation -- given 1000 topics and using *only 32 bits* from the topic discriminator is 1.89e-8, or one in 53 million. If the topic hash is used to seed a CRC, the probability will somewhat increase.
+Assuming perfect hashing (this is a ~sensible assumption for Rapidhash but an overly optimistic one for CRCs), the probability of Stochastic MOM failure -- i.e., data misinterpretation -- given 1000 topics and using *only 32 bits* from the topic hash is 1.89e-8, or one in 53 million. If the topic hash is used to seed a CRC, the probability will somewhat increase.
 
 It is essential to ensure that existing topics are not affected by new ones. To this end, each topic bears an age counter, which defines the priority of the topic during arbitration. The age counter should increase with time and usage of the topic. Currently, it is incremented whenever the topic is gossiped, and whenever a transfer is received (sic!) on the topic. Publishing a transfer does not increase the age because the publisher may be unconnected to subscribers. The age counter is CRDT-merged using siple max(), as a result, the counter grows faster as the number of nodes using the topic is increased.
 
@@ -125,8 +147,8 @@ A new 64-bit globally unique node-ID is defined that replaces both the old 128-b
 
 The named topic protocol somewhat lifts the level of abstraction presented to the application. Considering that, it does no longer appear useful to include the application-specific fields `health` and `mode` in the heartbeat message. Instead, applications should choose more specialized means of status reporting. In this proposal, these two fields along with the vendor-specific status code are consumed by the new `uint32 user_word`. Applications that seek full compatibility with the old nodes will set the two least significant bytes to the health and mode values. Eventually, it is expected that this field will become a simple general-purpose status reporting word with fully application-defined semantics.
 
-- [`7509.cyphal.node.Heartbeat.1.1`](dsdl/cyphal/node/7509.Heartbeat.1.1.dsdl)
-- [`cyphal.node.UID`](dsdl/cyphal/node/UID.0.1.dsdl)
+- [`7509.cyphal.Heartbeat.1.1`](dsdl/cyphal/7509.Heartbeat.1.1.dsdl)
+- [`cyphal.UID`](dsdl/cyphal/UID.0.1.dsdl)
 
 ### RPC
 
@@ -188,7 +210,7 @@ The mapping is guaranteed to be correct except during the initial configuration 
 
 Applications that require immediate connectivity without the initial configuration delays can store the stable configuration in non-volatile memory.
 
-While the autoconfiguration is in progress, transfers may briefly be emitted on the wrong subject-IDs. The 51-bit topic discriminator is used to avoid data misinterpretation in case of an allocation collision, allowing each subscriber on the oversubscribed subject-ID to pick only relevant transfers.
+While the autoconfiguration is in progress, transfers may briefly be emitted on the wrong subject-IDs. The topic hash used by the transport layer is used to avoid data misinterpretation in case of an allocation collision, allowing each subscriber on the oversubscribed subject-ID to pick only relevant transfers.
 
 ### When asked to subscribe
 
@@ -207,7 +229,7 @@ Incement the age counter of the current topic.
 3. Publish the heartbeat with the KV gossip.
 4. Set the last gossip time of the topic to the current time.
 
-### When a topic discriminator collision is observed
+### When a topic hash collision is observed
 
 Set the last gossip time of the topic to zero.
 
@@ -245,22 +267,52 @@ Regardless of the above steps, merge the local age as max(local age, remote age)
 From an integrator standpoint, the only difference is that topics are now assigned not via registers as numbers, but as topic name remappings as strings: `uavcan.pub.my_subject.id=1234` is now a remapping from `my_subject` to `/1234`.
 
 
+## Implementation notes
+
+```mermaid
+classDiagram
+direction LR
+    class cy {
+        +advertise()
+        +subscribe()
+    }
+    class publisher {
+        +publish()
+    }
+    class subscriber {
+        +callback
+    }
+    class future {
+        +callback
+    }
+    cy "1" o-- "*" _topic
+    cy "1" o-- "*" _subscriber_root
+    cy "1" --> "*" future
+    _topic "1" o-- "*" _coupling
+    _topic "1" <-- "*" publisher
+    publisher "1" <-- "*" future
+    _coupling "*" --> "1" _subscriber_root
+    _subscriber_root "1" o-- "*" subscriber
+    note "Automatically managed private entities are prefixed with '_'"
+    note "Heap-allocated items are: _topic, _subscriber_root, _coupling"
+```
+
+
 ## Missing features
-
-### Wildcard topic subscriptions
-
-This is not a protocol feature but a library feature, which is easy to add.
-The protocol requires no (nontrivial) changes to incorporate this.
-
-One specific use case can be found here: <https://forum.opencyphal.org/t/rfc-add-array-of-ports/1878>
-
-An asterisk `*` should match a given topic name segment (between `/` like `abc/*/qwe` matches `abc/def/qwe`) and the matched string should be passed to the application via the callback. Similarly, `**` could perhaps be useful by analogy with glob patterns.
-
-More complex key expressions could eventually be supported in the spirit of Zenoh or even DDS.
 
 ### Type assignability checking
 
 There is currently no robust solution on the horizon, but one tentative solution is to suffix the topic name with the type name. For example, if we have `zubax.fluxgrip.Feedback.1.0`, the topic could be named `/magnet/rear/status.fb1`, where `.fb1` hints at the type name and version.
+
+### Retirement of automatically created topics with no publishers
+
+Pattern subscribers (e.g., `/?/foo/*`) will automatically create new topics in the background when gossips matching the pattern are received. This will create issues with small nodes if the network sees some topic churn, because it will leave local tombstones taking up memory (computationally they are basically ~free).
+
+The solution is simple: maintain a new topic index that only contains topics *without local publishers* that are *coupled only with pattern subscribers* ordered by *last extrinsic activity*. Extrinsic activity is the reception of a heartbeat gossiping that topic, or receiving a transfer on that topic. Updating the index on every received transfer might be computationally expensive if it's an AVL tree; perhaps it could be replaced with a doubly-linked list, where on each update the topic is simply moved to the end, which is a constant-complexity operation; the oldest topic will be kept in the beginning of the list.
+
+The automatic retirement timeout should be set to a value greater than the topic scalability limit (say 1000 topics) times maximum heartbeat period (let's say 0.5 seconds), so ~10 minutes. There should be API to override this value.
+
+Alternatively, the user could specify the maximum number of automatic subscriptions, so that when the number is exceeded, the library will retire the oldest topic. This may cause subscription churn if not used carefully though.
 
 
 ## Changes to the transport libraries: libudpard, libcanard, libserard, etc.
@@ -281,20 +333,20 @@ The overall cost of the Pessimistic DAD is about 100~200 extra lines of code per
 
 ### Extensions to support stochastic MOM
 
-Stochastic multiple occupant monitoring (MOM) mixes parts of the 51-bit topic discriminator (which itself is defined as the 51 most significant bits of the 64-bit topic hash: `hash>>13`) into the transfer such that only transfers that carry the expected topic discriminator can be correctly received. This prevents data misinterpretation during the topic allocation phase, when multiple topics may briefly occupy the same subject-ID until the new conflict-free consensus is found by the network. How the topic discriminator is leveraged depends on the specific transport.
+Stochastic multiple occupant monitoring (MOM) mixes at most 48 of the most significant bits of the topic hash into the transfer such that only transfers that carry the expected topic hash can be correctly received. This prevents data misinterpretation during the topic allocation phase, when multiple topics may briefly occupy the same subject-ID until the new conflict-free consensus is found by the network. How the topic hash is leveraged depends on the specific transport.
 
-When the transport detects a topic discriminator mismatch, it has the option to notify the CRDT protocol so that it can assign a higher priority to the topic where the conflict is found. It is not essential because even if no such notification is delivered, CRDT will eventually reach a conflict-free consensus, but the time required may be longer.
+When the transport detects a topic hash mismatch, it has the option to notify the CRDT protocol so that it can assign a higher priority to the topic where the conflict is found. It is not essential because even if no such notification is delivered, CRDT will eventually reach a conflict-free consensus, but the time required may be longer.
 
 #### Cyphal/UDP and Cyphal/serial
 
-The 16-bit user data field of the frame header will contain some of the 16 bits of the topic discriminator. Other 32 bits will be inverted and the result will be used to seed the transfer-CRC; the current initial value of the transfer-CRC is 0xFFFFFFFF, meaning that pinned topics (whose discriminator is zero) will remain compatible with the old non-named topics. The three leftover bits could be discarded or used to populate a new small field of the header.
+The 16-bit user data field of the frame header will contain some of the 16 bits of the topic hash. Other 32 bits will be inverted and the result will be used to seed the transfer-CRC; the current initial value of the transfer-CRC is 0xFFFFFFFF, meaning that pinned topics (whose hash is zero) will remain compatible with the old non-named topics. The three leftover bits could be discarded or used to populate a new small field of the header.
 
 This results in a robust hash (6144 subject-IDs times 2^16 in the user word times 2^32 in the transfer CRC seed, also the optional three leftover bits could be added) that is expected to scale to very large networks even with multiple thousands of topics.
 
 #### Cyphal/CAN
 
-The CAN ID format only offers two bits for the topic discriminator: 21 and 22. Other 16 bits will be used to seed the 16-bit transfer-CRC (the default initial value of CRC-16-CCITT-FALSE is already zero). This excludes single-frame CAN transfers, though.
+The CAN ID format only offers two bits for the topic hash: 21 and 22. Other 16 bits will be used to seed the 16-bit transfer-CRC (the default initial value of CRC-16-CCITT-FALSE is already zero). This excludes single-frame CAN transfers, though.
 
-The collision detection capability of this scheme is poor as we only introduce 18 bits of hash, which means that named-topic networks based on CAN will not scale to large numbers of topics. Together with 6144 possible subject-ID values, the probability of an undetected discriminator collision given 40 topics (optimistically assuming perfect hashing, which is not accurate) is 4.8e-7, or one in two million. The actual probability is higher considering the limitations of CRC algorithms when used for hashing. Usage of this mechanism in larger CAN networks (more than about thirty-forty topics) is unsafe and requires changes to the CAN frame format.
+The collision detection capability of this scheme is poor as we only introduce 18 bits of hash, which means that named-topic networks based on CAN will not scale to large numbers of topics. Together with 6144 possible subject-ID values, the probability of an undetected hash collision given 40 topics (optimistically assuming perfect hashing, which is not accurate) is 4.8e-7, or one in two million. The actual probability is higher considering the limitations of CRC algorithms when used for hashing. Usage of this mechanism in larger CAN networks (more than about thirty-forty topics) is unsafe and requires changes to the CAN frame format.
 
 The above only applies to multi-frame transfers over CAN, since single-frame Cyphal/CAN transfers do not include the payload CRC, unlike the other transports. One quick and dirty solution to enable collision-safe named topics on CAN networks without nontrivial changes to the Cyphal/CAN layer is to pad the payload with zeroes such that it is at least 1 byte larger than the MTU (i.e., at least 8 bytes in Classic CAN networks, at least 64 bytes in CAN FD networks). Such zero padding is guaranteed to not alter the interpretation of the payload due to the implicit zero extension/truncation rules. This **does not affect pinned topics** since they are conflict-free by design; they can still remain unpadded and thus efficient.

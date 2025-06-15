@@ -10,11 +10,13 @@
 #pragma once
 
 #include "udp_wrapper.h"
-#include <cy.h>
+#include <cy_platform.h>
 #include <udpard.h>
 
 #define CY_UDP_POSIX_IFACE_COUNT_MAX           UDPARD_NETWORK_INTERFACE_COUNT_MAX
 #define CY_UDP_POSIX_NODE_ID_BLOOM_64BIT_WORDS 128
+
+struct cy_udp_posix_t;
 
 struct cy_udp_posix_topic_t
 {
@@ -26,15 +28,19 @@ struct cy_udp_posix_topic_t
     /// Every OOM implies that either a frame or a full transfer were lost.
     uint64_t rx_oom_count;
 
-    /// Handler for errors occurring while reading from the socket of this topic on the specified iface.
-    /// These are platform-specific.
-    /// The default handler is provided which will use CY_TRACE() to report the error.
-    void (*rx_sock_err_handler)(struct cy_udp_posix_topic_t* topic, uint_fast8_t iface_index, int16_t error);
+    /// Initialized from the eponymous field of cy_udp_posix_t when a new topic is created.
+    void (*rx_sock_err_handler)(struct cy_udp_posix_t*       cy_udp,
+                                struct cy_udp_posix_topic_t* topic,
+                                uint_fast8_t                 iface_index,
+                                uint32_t                     err_no);
 };
 
 struct cy_udp_posix_t
 {
     struct cy_t base;
+
+    /// Maximum seen value across all topics since initialization.
+    size_t response_extent_with_overhead;
 
     uint64_t            node_id_bloom_storage[CY_UDP_POSIX_NODE_ID_BLOOM_64BIT_WORDS];
     struct cy_bloom64_t node_id_bloom;
@@ -63,15 +69,24 @@ struct cy_udp_posix_t
         uint64_t oom_count;
     } rpc_rx[CY_UDP_POSIX_IFACE_COUNT_MAX];
 
+    /// Handler for errors occurring while reading from the socket of the topic on the specified iface.
+    /// The default handler is provided which will use CY_TRACE() to report the error.
+    /// This is only used to initialize the corresponding field of cy_udp_posix_topic_t when a new topic is created.
+    /// Changes to this handler will not affect existing topics.
+    void (*rx_sock_err_handler)(struct cy_udp_posix_t*       cy_udp,
+                                struct cy_udp_posix_topic_t* topic,
+                                uint_fast8_t                 iface_index,
+                                uint32_t                     err_no);
+
     /// Handler for errors occurring while writing into a tx socket on the specified iface.
     /// These are platform-specific.
     /// The default handler is provided which will use CY_TRACE() to report the error.
-    void (*tx_sock_err_handler)(struct cy_udp_posix_t* cy_udp, uint_fast8_t iface_index, int16_t error);
+    void (*tx_sock_err_handler)(struct cy_udp_posix_t* cy_udp, uint_fast8_t iface_index, uint32_t err_no);
 
     /// Handler for errors occurring while reading from an RPC RX socket on the specified iface.
     /// These are platform-specific.
     /// The default handler is provided which will use CY_TRACE() to report the error.
-    void (*rpc_rx_sock_err_handler)(struct cy_udp_posix_t* topic, uint_fast8_t iface_index, int16_t error);
+    void (*rpc_rx_sock_err_handler)(struct cy_udp_posix_t* topic, uint_fast8_t iface_index, uint32_t err_no);
 
     size_t   mem_allocated_fragments;
     uint64_t mem_oom_count;
@@ -86,11 +101,19 @@ cy_us_t cy_udp_posix_now(void);
 /// to parse IP addresses from string see udp_wrapper_parse_iface_address().
 ///
 /// The local node ID should be set to CY_NODE_ID_INVALID unless manual configuration is required.
-cy_err_t cy_udp_posix_new(struct cy_udp_posix_t* const cy_udp,
-                          const uint64_t               uid,
-                          const char* const            namespace_,
-                          const uint32_t               local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
-                          const size_t                 tx_queue_capacity_per_iface);
+cy_err_t               cy_udp_posix_new(struct cy_udp_posix_t* const cy_udp,
+                                        const uint64_t               uid,
+                                        const struct wkv_str_t       namespace_,
+                                        const uint32_t               local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
+                                        const size_t                 tx_queue_capacity_per_iface);
+static inline cy_err_t cy_udp_posix_new_c(struct cy_udp_posix_t* const cy_udp,
+                                          const uint64_t               uid,
+                                          const char* const            namespace_,
+                                          const uint32_t local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
+                                          const size_t   tx_queue_capacity_per_iface)
+{
+    return cy_udp_posix_new(cy_udp, uid, wkv_key(namespace_), local_iface_address, tx_queue_capacity_per_iface);
+}
 
 /// Keep running the event loop until the deadline is reached or until the first error.
 /// If the deadline is not in the future, the function will process pending events once and return without blocking.

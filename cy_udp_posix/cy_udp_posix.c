@@ -19,16 +19,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 /// Maximum expected incoming datagram size. If larger jumbo frames are expected, this value should be increased.
 #ifndef CY_UDP_SOCKET_READ_BUFFER_SIZE
 #define CY_UDP_SOCKET_READ_BUFFER_SIZE 2000
 #endif
-
-/// Responses to all topics that are addressed to our node are delivered using the same RPC port, which needs an extent.
-/// In LibUDPard, the extent does not really affect memory allocation, because libudpard does not defragment received
-/// transfers; meaning that the extent value can be arbitrarily large.
-#define CY_UDP_POSIX_TOPIC_RESPONSE_EXTENT (1024ULL * 1024ULL * 1024ULL)
 
 static int64_t min_i64(const int64_t a, const int64_t b)
 {
@@ -37,23 +33,25 @@ static int64_t min_i64(const int64_t a, const int64_t b)
 
 static void default_tx_sock_err_handler(struct cy_udp_posix_t* const cy_udp,
                                         const uint_fast8_t           iface_index,
-                                        const int16_t                error)
+                                        const uint32_t               err_no)
 {
-    CY_TRACE(&cy_udp->base, "TX socket error on iface #%u: %d", iface_index, error);
+    CY_TRACE(&cy_udp->base, "⚠️ TX socket error on iface #%u: %u", iface_index, (unsigned)err_no);
 }
 
 static void default_rpc_rx_sock_err_handler(struct cy_udp_posix_t* const cy_udp,
                                             const uint_fast8_t           iface_index,
-                                            const int16_t                error)
+                                            const uint32_t               err_no)
 {
-    CY_TRACE(&cy_udp->base, "RPC RX socket error on iface #%u: %d", iface_index, error);
+    CY_TRACE(&cy_udp->base, "⚠️ RPC RX socket error on iface #%u: %u", iface_index, (unsigned)err_no);
 }
 
-static void default_rx_sock_err_handler(struct cy_udp_posix_topic_t* const topic,
+static void default_rx_sock_err_handler(struct cy_udp_posix_t*             cy_udp,
+                                        struct cy_udp_posix_topic_t* const topic,
                                         const uint_fast8_t                 iface_index,
-                                        const int16_t                      error)
+                                        const uint32_t                     err_no)
 {
-    CY_TRACE(topic->base.cy, "RX socket error on iface #%u topic '%s': %d", iface_index, topic->base.name, error);
+    CY_TRACE(
+      &cy_udp->base, "⚠️ RX socket error on iface #%u topic '%s': %u", iface_index, topic->base.name, (unsigned)err_no);
 }
 
 static bool is_valid_ip(const uint32_t ip)
@@ -72,7 +70,6 @@ static void* mem_alloc(void* const user, const size_t size)
             cy_udp->mem_oom_count++;
         }
     }
-    // CY_TRACE(&cy_udp->base, "mem_alloc(%zu) -> %p", size, out);
     return out;
 }
 
@@ -80,7 +77,6 @@ static void mem_free(void* const user, const size_t size, void* const pointer)
 {
     struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)user;
     (void)size;
-    // CY_TRACE(&cy_udp->base, "mem_free(%zu, %p)", size, pointer);
     if (pointer != NULL) {
         assert(cy_udp->mem_allocated_fragments > 0);
         cy_udp->mem_allocated_fragments--;
@@ -98,12 +94,77 @@ static void purge_tx(struct cy_udp_posix_t* const cy_udp, const uint_fast8_t ifa
     }
 }
 
+static void rpc_listen(struct cy_udp_posix_t* const cy_udp)
+{
+    assert(cy_udp->base.node_id <= UDPARD_NODE_ID_MAX);
+    const int_fast8_t res = udpardRxRPCDispatcherListen(&cy_udp->rpc_rx_dispatcher,
+                                                        &cy_udp->rpc_rx_port_topic_response,
+                                                        CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
+                                                        true,
+                                                        cy_udp->response_extent_with_overhead);
+    assert(res >= 0); // infallible by design!
+    // https://github.com/pavel-kirienko/cy/issues/8
+    // https://github.com/OpenCyphal/libudpard/issues/63 (applies to requests only in this case)
+    cy_udp->rpc_rx_port_topic_response.port.transfer_id_timeout_usec = 0;
+    CY_TRACE(&cy_udp->base,
+             "🎧 RPC service_id=%04x extent=%zu",
+             cy_udp->rpc_rx_port_topic_response.service_id,
+             cy_udp->response_extent_with_overhead);
+}
+
+static void rpc_unlisten(struct cy_udp_posix_t* const cy_udp)
+{
+    const int_fast8_t res =
+      udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_RPC_SERVICE_ID_TOPIC_RESPONSE, true);
+    assert(res >= 0); // infallible by design
+}
+
+static cy_err_t err_from_udpard(const int32_t e)
+{
+    switch (e) {
+        case -UDPARD_ERROR_ARGUMENT:
+            return CY_ERR_ARGUMENT;
+        case -UDPARD_ERROR_MEMORY:
+            return CY_ERR_MEMORY;
+        case -UDPARD_ERROR_CAPACITY:
+            return CY_ERR_CAPACITY;
+        case -UDPARD_ERROR_ANONYMOUS:
+            return CY_ERR_JOIN;
+        default:
+            assert(e >= 0);
+            return CY_OK;
+    }
+}
+
+static cy_err_t err_from_udp_wrapper(const int16_t e)
+{
+    switch (e) {
+        case -EINVAL:
+            return CY_ERR_ARGUMENT;
+        case -ENOMEM:
+            return CY_ERR_MEMORY;
+        default:
+            return (e < 0) ? CY_ERR_MEDIA : CY_OK;
+    }
+}
+
 // ----------------------------------------  PLATFORM INTERFACE  ----------------------------------------
 
 static cy_us_t platform_now(const struct cy_t* const cy)
 {
     (void)cy;
     return cy_udp_posix_now();
+}
+
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+static void* platform_realloc(struct cy_t* const cy, void* const ptr, const size_t new_size)
+{
+    (void)cy;
+    if (new_size > 0) {
+        return realloc(ptr, new_size);
+    }
+    free(ptr);
+    return NULL;
 }
 
 static uint64_t platform_prng(const struct cy_t* const cy)
@@ -135,43 +196,36 @@ static cy_err_t platform_node_id_set(struct cy_t* const cy)
     // so it does not require updating. We need to reconfigure the RPC plane though.
 
     // Initialize and start the UDP RPC dispatcher.
-    cy_err_t res = udpardRxRPCDispatcherInit(&cy_udp->rpc_rx_dispatcher, cy_udp->rx_mem);
-    assert(res >= 0); // infallible by design
     struct UdpardUDPIPEndpoint ep = { 0 };
-    res                           = udpardRxRPCDispatcherStart(&cy_udp->rpc_rx_dispatcher, cy->node_id, &ep);
-    assert(res >= 0); // infallible by design
-
-    // Start the RPC ports, all of them. Topic responses are sent as RPC requests. Shut up, it makes sense.
-    res = udpardRxRPCDispatcherListen(&cy_udp->rpc_rx_dispatcher,
-                                      &cy_udp->rpc_rx_port_topic_response,
-                                      CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
-                                      true,
-                                      CY_UDP_POSIX_TOPIC_RESPONSE_EXTENT);
-    assert(res >= 0); // infallible by design
-    // https://github.com/pavel-kirienko/cy/issues/8
-    // https://github.com/OpenCyphal/libudpard/issues/63 (applies to requests only in this case)
-    cy_udp->rpc_rx_port_topic_response.port.transfer_id_timeout_usec = 0;
+    {
+        int_fast8_t res = udpardRxRPCDispatcherInit(&cy_udp->rpc_rx_dispatcher, cy_udp->rx_mem);
+        assert(res >= 0); // infallible by design
+        res = udpardRxRPCDispatcherStart(&cy_udp->rpc_rx_dispatcher, cy->node_id, &ep);
+        assert(res >= 0); // infallible by design
+    }
+    rpc_listen(cy_udp);
 
     // Now it is finally time to open the multicast RX sockets.
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         cy_udp->rpc_rx[i].sock      = udp_wrapper_rx_new();
         cy_udp->rpc_rx[i].oom_count = 0;
     }
+    cy_err_t res = CY_OK;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         if (is_valid_ip(cy_udp->local_iface_address[i])) {
-            res = udp_wrapper_rx_init(&cy_udp->rpc_rx[i].sock,
-                                      cy_udp->local_iface_address[i],
-                                      ep.ip_address,
-                                      ep.udp_port,
-                                      cy_udp->tx[i].local_port);
-            if (res < 0) {
+            res = err_from_udp_wrapper(udp_wrapper_rx_init(&cy_udp->rpc_rx[i].sock,
+                                                           cy_udp->local_iface_address[i],
+                                                           ep.ip_address,
+                                                           ep.udp_port,
+                                                           cy_udp->tx[i].local_port));
+            if (res != CY_OK) {
                 break;
             }
         }
     }
 
     // Cleanup on error.
-    if (res < 0) {
+    if (res != CY_OK) {
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
             udp_wrapper_rx_close(&cy_udp->rpc_rx[i].sock);
         }
@@ -188,11 +242,7 @@ static void platform_node_id_clear(struct cy_t* const cy)
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         udp_wrapper_rx_close(&cy_udp->rpc_rx[i].sock);
     }
-    {
-        const cy_err_t res =
-          udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_RPC_SERVICE_ID_TOPIC_RESPONSE, true);
-        assert(res >= 0); // infallible by design
-    }
+    rpc_unlisten(cy_udp);
 
     // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
     // so it does not require updating.
@@ -217,7 +267,7 @@ static cy_err_t platform_request(struct cy_t* const                  cy,
 {
     CY_BUFFER_GATHER_ON_STACK(linear_payload, payload);
     struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
-    cy_err_t                     res    = 0;
+    cy_err_t                     res    = CY_OK;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         if (cy_udp->tx[i].udpard_tx.queue_capacity > 0) {
             const int32_t e =
@@ -229,8 +279,11 @@ static cy_err_t platform_request(struct cy_t* const                  cy,
                               metadata.transfer_id,
                               (struct UdpardPayload){ .size = linear_payload.size, .data = linear_payload.data },
                               NULL);
-            // NOLINTNEXTLINE(*-narrowing-conversions, *-avoid-nested-conditional-operator)
-            res = (e < 0) ? (cy_err_t)e : ((res < 0) ? res : (cy_err_t)e);
+            if (e < 0) {
+                res = err_from_udpard(e);
+            } else {
+                res = (res != CY_OK) ? res : err_from_udpard(e);
+            }
         }
     }
     return res;
@@ -238,6 +291,7 @@ static cy_err_t platform_request(struct cy_t* const                  cy,
 
 static struct cy_topic_t* platform_topic_new(struct cy_t* const cy)
 {
+    const struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
     struct cy_udp_posix_topic_t* const topic =
       (struct cy_udp_posix_topic_t*)mem_alloc(cy, sizeof(struct cy_udp_posix_topic_t));
     if (topic != NULL) {
@@ -245,73 +299,80 @@ static struct cy_topic_t* platform_topic_new(struct cy_t* const cy)
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
             topic->sock_rx[i] = udp_wrapper_rx_new();
         }
-        topic->rx_sock_err_handler = default_rx_sock_err_handler;
+        topic->rx_sock_err_handler = cy_udp->rx_sock_err_handler;
     }
     return (struct cy_topic_t*)topic;
 }
 
-static void platform_topic_destroy(struct cy_topic_t* const topic)
+static void platform_topic_destroy(struct cy_t* const cy, struct cy_topic_t* const topic)
 {
     struct cy_udp_posix_topic_t* const udp_topic = (struct cy_udp_posix_topic_t*)topic;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         udp_wrapper_rx_close(&udp_topic->sock_rx[i]);
     }
-    mem_free(topic->cy, sizeof(struct cy_udp_posix_topic_t), topic);
+    mem_free(cy, sizeof(struct cy_udp_posix_topic_t), topic);
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static cy_err_t platform_topic_publish(struct cy_topic_t* const          topic,
+static cy_err_t platform_topic_publish(struct cy_t* const                cy,
+                                       struct cy_publisher_t* const      pub,
                                        const cy_us_t                     tx_deadline,
                                        const struct cy_buffer_borrowed_t payload)
 {
     CY_BUFFER_GATHER_ON_STACK(linear_payload, payload);
-    struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)topic->cy;
-    cy_err_t                     res    = 0;
+    struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_err_t                     res    = CY_OK;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         if (cy_udp->tx[i].udpard_tx.queue_capacity > 0) {
             const int32_t e =
               udpardTxPublish(&cy_udp->tx[i].udpard_tx,
                               (UdpardMicrosecond)tx_deadline,
-                              (enum UdpardPriority)topic->pub_priority,
-                              cy_topic_get_subject_id(topic),
-                              topic->pub_transfer_id,
+                              (enum UdpardPriority)pub->priority,
+                              cy_topic_subject_id(pub->topic),
+                              pub->topic->pub_transfer_id,
                               (struct UdpardPayload){ .size = linear_payload.size, .data = linear_payload.data },
                               NULL);
-            // NOLINTNEXTLINE(*-narrowing-conversions, *-avoid-nested-conditional-operator)
-            res = (e < 0) ? (cy_err_t)e : ((res < 0) ? res : (cy_err_t)e);
+            if (e < 0) {
+                res = err_from_udpard(e);
+            } else {
+                res = (res != CY_OK) ? res : err_from_udpard(e);
+            }
         }
     }
     return res;
 }
 
-static cy_err_t platform_topic_subscribe(struct cy_topic_t* const cy_topic)
+static cy_err_t platform_topic_subscribe(struct cy_t* const                    cy,
+                                         struct cy_topic_t* const              cy_topic,
+                                         const struct cy_subscription_params_t params)
 {
     struct cy_udp_posix_topic_t* const topic  = (struct cy_udp_posix_topic_t*)cy_topic;
-    const struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy_topic->cy;
+    const struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
 
     // Set up the udpard subscription. This does not yet allocate any resources.
-    cy_err_t res = (cy_err_t)udpardRxSubscriptionInit(&topic->sub, //
-                                                      cy_topic_get_subject_id(cy_topic),
-                                                      cy_topic->sub_extent,
-                                                      cy_udp->rx_mem);
-    if (res < 0) {
+    cy_err_t res = err_from_udpard(udpardRxSubscriptionInit(&topic->sub, //
+                                                            cy_topic_subject_id(cy_topic),
+                                                            params.extent,
+                                                            cy_udp->rx_mem));
+    if (res != CY_OK) {
         return res; // No cleanup needed, no resources allocated yet.
     }
+    topic->sub.port.transfer_id_timeout_usec = (UdpardMicrosecond)params.transfer_id_timeout;
 
     // Open the sockets for this subscription.
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         topic->sock_rx[i] = udp_wrapper_rx_new();
-        if ((res >= 0) && is_valid_ip(cy_udp->local_iface_address[i])) {
-            res = udp_wrapper_rx_init(&topic->sock_rx[i],
-                                      cy_udp->local_iface_address[i],
-                                      topic->sub.udp_ip_endpoint.ip_address,
-                                      topic->sub.udp_ip_endpoint.udp_port,
-                                      cy_udp->tx[i].local_port);
+        if ((res == CY_OK) && is_valid_ip(cy_udp->local_iface_address[i])) {
+            res = err_from_udp_wrapper(udp_wrapper_rx_init(&topic->sock_rx[i],
+                                                           cy_udp->local_iface_address[i],
+                                                           topic->sub.udp_ip_endpoint.ip_address,
+                                                           topic->sub.udp_ip_endpoint.udp_port,
+                                                           cy_udp->tx[i].local_port));
         }
     }
 
     // Cleanup on error.
-    if (res < 0) {
+    if (res != CY_OK) {
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
             udp_wrapper_rx_close(&topic->sock_rx[i]);
         }
@@ -319,23 +380,45 @@ static cy_err_t platform_topic_subscribe(struct cy_topic_t* const cy_topic)
     return res;
 }
 
-static void platform_topic_unsubscribe(struct cy_topic_t* const cy_topic)
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+static void platform_topic_unsubscribe(struct cy_t* const cy, struct cy_topic_t* const cy_topic)
 {
+    (void)cy;
     udpardRxSubscriptionFree(&((struct cy_udp_posix_topic_t*)cy_topic)->sub);
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         udp_wrapper_rx_close(&((struct cy_udp_posix_topic_t*)cy_topic)->sock_rx[i]);
     }
 }
 
-static void platform_topic_handle_resubscription_error(struct cy_topic_t* const cy_topic, const cy_err_t error)
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+static void platform_topic_advertise(struct cy_t* const       cy,
+                                     struct cy_topic_t* const cy_topic,
+                                     const size_t             response_extent_with_overhead)
 {
-    CY_TRACE(cy_topic->cy, "Resubscription error on topic '%s': %d", cy_topic->name, error);
-    // Currently, we don't do anything here. What we could do is to put all failed topics into some list,
-    // and attempt to resubscribe to them every now and then from the spin functions.
+    (void)cy_topic;
+    struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    if (response_extent_with_overhead > cy_udp->response_extent_with_overhead) {
+        cy_udp->response_extent_with_overhead = response_extent_with_overhead;
+        CY_TRACE(&cy_udp->base, //
+                 "📏 Response (extent+overhead) increased to %zu bytes",
+                 cy_udp->response_extent_with_overhead);
+        if (cy_udp->base.node_id <= UDPARD_NODE_ID_MAX) {
+            rpc_unlisten(cy_udp);
+            rpc_listen(cy_udp);
+        }
+    }
+}
+
+static void platform_topic_on_subscription_error(struct cy_t* const       cy,
+                                                 struct cy_topic_t* const cy_topic,
+                                                 const cy_err_t           error)
+{
+    CY_TRACE(cy, "⚠️ Subscription error on topic '%s': %d", (cy_topic != NULL) ? cy_topic->name : "", error);
 }
 
 static const struct cy_platform_t g_platform = {
     .now            = platform_now,
+    .realloc        = platform_realloc,
     .prng           = platform_prng,
     .buffer_release = platform_buffer_release,
 
@@ -345,12 +428,13 @@ static const struct cy_platform_t g_platform = {
 
     .request = platform_request,
 
-    .topic_new                         = platform_topic_new,
-    .topic_destroy                     = platform_topic_destroy,
-    .topic_publish                     = platform_topic_publish,
-    .topic_subscribe                   = platform_topic_subscribe,
-    .topic_unsubscribe                 = platform_topic_unsubscribe,
-    .topic_handle_resubscription_error = platform_topic_handle_resubscription_error,
+    .topic_new                   = platform_topic_new,
+    .topic_destroy               = platform_topic_destroy,
+    .topic_publish               = platform_topic_publish,
+    .topic_subscribe             = platform_topic_subscribe,
+    .topic_unsubscribe           = platform_topic_unsubscribe,
+    .topic_advertise             = platform_topic_advertise,
+    .topic_on_subscription_error = platform_topic_on_subscription_error,
 
     .node_id_max      = UDPARD_NODE_ID_MAX,
     .transfer_id_mask = UINT64_MAX,
@@ -362,19 +446,20 @@ cy_us_t cy_udp_posix_now(void)
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) { // NOLINT(*-include-cleaner)
-        return 0;
+        abort();
     }
     return (ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
 }
 
 cy_err_t cy_udp_posix_new(struct cy_udp_posix_t* const cy_udp,
                           const uint64_t               uid,
-                          const char* const            namespace_,
+                          const struct wkv_str_t       namespace_,
                           const uint32_t               local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
                           const size_t                 tx_queue_capacity_per_iface)
 {
     assert(cy_udp != NULL);
     memset(cy_udp, 0, sizeof(*cy_udp));
+    cy_udp->response_extent_with_overhead = 64; // We start from an arbitrary value that just makes sense.
     // Set up the memory resources. We could use block pool allocator here as well!
     cy_udp->mem.allocate                  = mem_alloc;
     cy_udp->mem.deallocate                = mem_free;
@@ -383,6 +468,7 @@ cy_err_t cy_udp_posix_new(struct cy_udp_posix_t* const cy_udp,
     cy_udp->rx_mem.fragment               = cy_udp->mem;
     cy_udp->rx_mem.payload.deallocate     = mem_free;
     cy_udp->rx_mem.payload.user_reference = cy_udp;
+    cy_udp->rx_sock_err_handler           = default_rx_sock_err_handler;
     cy_udp->tx_sock_err_handler           = default_tx_sock_err_handler;
     cy_udp->rpc_rx_sock_err_handler       = default_rpc_rx_sock_err_handler;
 
@@ -392,36 +478,37 @@ cy_err_t cy_udp_posix_new(struct cy_udp_posix_t* const cy_udp,
 
     // Initialize the udpard tx pipelines. They are all initialized always even if the corresponding iface is disabled,
     // for regularity, because an unused tx pipline needs no resources, so it's not a problem.
-    cy_err_t res = 0;
-    for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res >= 0); i++) {
+    cy_err_t res = CY_OK;
+    for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res == CY_OK); i++) {
         cy_udp->local_iface_address[i] = 0;
         cy_udp->tx[i].sock             = udp_wrapper_tx_new();
         cy_udp->rpc_rx[i].sock         = udp_wrapper_rx_new();
-        res                            = (cy_err_t)udpardTxInit(
-          &cy_udp->tx[i].udpard_tx, &cy_udp->base.node_id, tx_queue_capacity_per_iface, cy_udp->mem);
+        res                            = err_from_udpard(
+          udpardTxInit(&cy_udp->tx[i].udpard_tx, &cy_udp->base.node_id, tx_queue_capacity_per_iface, cy_udp->mem));
     }
-    if (res < 0) {
+    if (res != CY_OK) {
         return res; // Cleanup not required -- no resources allocated yet.
     }
     // FYI: the RPC dispatcher is only initialized ad-hoc when setting the node-ID.
 
     // Initialize the bottom layer first. Rx sockets are initialized per subscription, so not here.
-    for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res >= 0); i++) {
+    for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res == CY_OK); i++) {
         if (is_valid_ip(local_iface_address[i])) {
             cy_udp->local_iface_address[i] = local_iface_address[i];
-            res = udp_wrapper_tx_init(&cy_udp->tx[i].sock, local_iface_address[i], &cy_udp->tx[i].local_port);
+            res                            = err_from_udp_wrapper(
+              udp_wrapper_tx_init(&cy_udp->tx[i].sock, local_iface_address[i], &cy_udp->tx[i].local_port));
         } else {
             cy_udp->tx[i].udpard_tx.queue_capacity = 0;
         }
     }
 
     // Initialize Cy. It will not emit any transfers; this only happens from cy_heartbeat() and cy_publish().
-    if (res >= 0) {
+    if (res == CY_OK) {
         res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
     }
 
     // Cleanup on error.
-    if (res < 0) {
+    if (res != CY_OK) {
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
             purge_tx(cy_udp, i);
             udp_wrapper_tx_close(&cy_udp->tx[i].sock); // The handle may be invalid, but we don't care.
@@ -452,7 +539,7 @@ static void tx_offload(struct cy_udp_posix_t* const cy_udp)
                     }
                     if (send_res < 0) {
                         assert(cy_udp->tx_sock_err_handler != NULL);
-                        cy_udp->tx_sock_err_handler(cy_udp, i, send_res);
+                        cy_udp->tx_sock_err_handler(cy_udp, i, (uint32_t)-send_res);
                     }
                 } else {
                     cy_udp->tx[i].frames_expired++;
@@ -486,13 +573,13 @@ static struct cy_buffer_owned_t make_rx_buffer(const struct UdpardFragment head)
     };
 }
 
-static void ingest_topic_frame(struct cy_udp_posix_topic_t* const topic,
+static void ingest_topic_frame(struct cy_udp_posix_t* const       cy_udp,
+                               struct cy_udp_posix_topic_t* const topic,
                                const cy_us_t                      ts,
                                const uint_fast8_t                 iface_index,
                                const struct UdpardMutablePayload  dgram)
 {
-    const struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)topic->base.cy;
-    if (cy_topic_has_local_subscribers(&topic->base) && topic->base.subscribed) {
+    if ((topic->base.couplings != NULL) && topic->base.subscribed) {
         struct UdpardRxTransfer transfer = { 0 }; // udpard takes ownership of the dgram payload buffer.
         const int_fast8_t       er =
           udpardRxSubscriptionReceive(&topic->sub, (UdpardMicrosecond)ts, dgram, iface_index, &transfer);
@@ -500,7 +587,7 @@ static void ingest_topic_frame(struct cy_udp_posix_topic_t* const topic,
             const struct cy_transfer_owned_t tr = { .timestamp = (cy_us_t)transfer.timestamp_usec,
                                                     .metadata  = make_metadata(&transfer),
                                                     .payload   = make_rx_buffer(transfer.payload) };
-            cy_ingest_topic_transfer(&topic->base, tr);
+            cy_ingest_topic_transfer(&cy_udp->base, &topic->base, tr);
         } else if (er == 0) {
             (void)0; // Transfer is not yet completed, nothing to do for now.
         } else if (er == -UDPARD_ERROR_MEMORY) {
@@ -568,10 +655,10 @@ static void read_socket(struct cy_udp_posix_t* const       cy_udp,
         cy_udp->mem.deallocate(cy_udp->mem.user_reference, CY_UDP_SOCKET_READ_BUFFER_SIZE, dgram.data);
         if (topic != NULL) {
             assert(topic->rx_sock_err_handler != NULL);
-            topic->rx_sock_err_handler(topic, iface_index, rx_result);
+            topic->rx_sock_err_handler(cy_udp, topic, iface_index, (uint32_t)-rx_result);
         } else {
             assert(cy_udp->rpc_rx_sock_err_handler != NULL);
-            cy_udp->rpc_rx_sock_err_handler(cy_udp, iface_index, rx_result);
+            cy_udp->rpc_rx_sock_err_handler(cy_udp, iface_index, (uint32_t)-rx_result);
         }
         return;
     }
@@ -579,6 +666,7 @@ static void read_socket(struct cy_udp_posix_t* const       cy_udp,
         cy_udp->mem.deallocate(cy_udp->mem.user_reference, CY_UDP_SOCKET_READ_BUFFER_SIZE, dgram.data);
         return;
     }
+    // TODO: realloc the buffer to fit the actual size of the datagram to reduce inner fragmentation.
 
     // Check for address collisions. This must be done at the frame level because if there are multiple nodes
     // sitting at our ID, we may be unable to receive any multiframe transfers from them.
@@ -595,7 +683,7 @@ static void read_socket(struct cy_udp_posix_t* const       cy_udp,
 
     // Pass the data buffer into LibUDPard then into Cy for further processing. It takes ownership of the buffer.
     if (topic != NULL) {
-        ingest_topic_frame(topic, ts, iface_index, dgram);
+        ingest_topic_frame(cy_udp, topic, ts, iface_index, dgram);
     } else {
         ingest_rpc_frame(cy_udp, ts, iface_index, dgram);
     }
@@ -629,7 +717,7 @@ static cy_err_t spin_once_until(struct cy_udp_posix_t* const cy_udp, const cy_us
     for (struct cy_udp_posix_topic_t* topic = (struct cy_udp_posix_topic_t*)cy_topic_iter_first(&cy_udp->base);
          topic != NULL;
          topic = (struct cy_udp_posix_topic_t*)cy_topic_iter_next(&topic->base)) {
-        if (cy_topic_has_local_subscribers(&topic->base)) {
+        if (topic->base.couplings != NULL) {
             for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
                 if (is_valid_ip(cy_udp->local_iface_address[i])) {
                     assert(udp_wrapper_rx_is_initialized(&topic->sock_rx[i]));
@@ -654,8 +742,8 @@ static cy_err_t spin_once_until(struct cy_udp_posix_t* const cy_udp, const cy_us
 
     // Do a blocking wait.
     const cy_us_t wait_timeout = deadline - min_i64(cy_udp_posix_now(), deadline);
-    cy_err_t      res          = udp_wrapper_wait(wait_timeout, tx_count, tx_await, rx_count, rx_await);
-    if (res >= 0) {
+    cy_err_t      res = err_from_udp_wrapper(udp_wrapper_wait(wait_timeout, tx_count, tx_await, rx_count, rx_await));
+    if (res == CY_OK) {
         const cy_us_t ts = cy_udp_posix_now(); // immediately after unblocking
 
         // Process readable handles. The writable ones will be taken care of later.
@@ -667,7 +755,7 @@ static cy_err_t spin_once_until(struct cy_udp_posix_t* const cy_udp, const cy_us
 
         // Remember that we need to periodically poll cy_update() even if no traffic is received.
         // The update needs to be invoked after all incoming transfers are handled in this cycle, not before.
-        assert(res >= 0);
+        assert(res == CY_OK);
         res = cy_update(&cy_udp->base);
 
         // While handling the events, we could have generated additional TX items, so we need to process them again.
@@ -679,8 +767,8 @@ static cy_err_t spin_once_until(struct cy_udp_posix_t* const cy_udp, const cy_us
 
 cy_err_t cy_udp_posix_spin_until(struct cy_udp_posix_t* const cy_udp, const cy_us_t deadline)
 {
-    cy_err_t res = 0;
-    while (res >= 0) {
+    cy_err_t res = CY_OK;
+    while (res == CY_OK) {
         res = spin_once_until(cy_udp, min_i64(deadline, cy_udp->base.heartbeat_next));
         if (deadline <= cy_udp_posix_now()) {
             break;
@@ -692,5 +780,5 @@ cy_err_t cy_udp_posix_spin_until(struct cy_udp_posix_t* const cy_udp, const cy_u
 cy_err_t cy_udp_posix_spin_once(struct cy_udp_posix_t* const cy_udp)
 {
     assert(cy_udp != NULL);
-    return spin_once_until(cy_udp, min_i64(cy_udp_posix_now() + 2000, cy_udp->base.heartbeat_next));
+    return spin_once_until(cy_udp, min_i64(cy_udp_posix_now() + 1000, cy_udp->base.heartbeat_next));
 }
