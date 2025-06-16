@@ -77,10 +77,13 @@ while (true) {
     const cy_err_t err_spin = cy_udp_posix_spin_once(&cy_udp_posix);
     if (err_spin != CY_OK) { ... }
 
-    // PUBLISH MESSAGES (no need to do anything else unlike in the case of subscription)
-    // Optionally we can check if the local node has a node-ID. It will automatically appear
+    // PUBLISH MESSAGES.
+    // Optionally, we can check if the local node has a node-ID using cy_joined(). It will automatically appear
     // if not given explicitly at startup in a few seconds; once appeared, it will always remain available,
     // but it may change if a collision is discovered (should never happen in a well-managed network).
+    // Until joined, the local node cannot send multi-frame transfers (so the payload size is limited by the
+    // MTU of the underlying transport) and cannot send or receive responses to messages. In many applications
+    // these limitations are not substantial (esp. with large-MTU transports like Cyphal/UDP or Cyphal/serial).
     if (cy_joined(cy)) {
         char msg[256];
         sprintf(msg, "I am %016llx. time=%lld us", (unsigned long long)cy->uid, (long long)now);
@@ -300,10 +303,6 @@ direction LR
 
 ## Missing features
 
-### Type assignability checking
-
-There is currently no robust solution on the horizon, but one tentative solution is to suffix the topic name with the type name. For example, if we have `zubax.fluxgrip.Feedback.1.0`, the topic could be named `/magnet/rear/status.fb1`, where `.fb1` hints at the type name and version.
-
 ### Retirement of automatically created topics with no publishers
 
 Pattern subscribers (e.g., `/?/foo/*`) will automatically create new topics in the background when gossips matching the pattern are received. This will create issues with small nodes if the network sees some topic churn, because it will leave local tombstones taking up memory (computationally they are basically ~free).
@@ -313,6 +312,20 @@ The solution is simple: maintain a new topic index that only contains topics *wi
 The automatic retirement timeout should be set to a value greater than the topic scalability limit (say 1000 topics) times maximum heartbeat period (let's say 0.5 seconds), so ~10 minutes. There should be API to override this value.
 
 Alternatively, the user could specify the maximum number of automatic subscriptions, so that when the number is exceeded, the library will retire the oldest topic. This may cause subscription churn if not used carefully though.
+
+### Type assignability checking
+
+There is currently no robust solution on the horizon, but one tentative solution is to suffix the topic name with the type name. For example, if we have `zubax.fluxgrip.Feedback.1.0`, the topic could be named `/magnet/rear/status.fb1`, where `.fb1` hints at the type name and version.
+
+### Multitenant topics
+
+Low-criticality, low-bandwidth topics may be allowed to share the same subject-ID without attempting to resolve collisions. This will reduce the workload on the consensus protocol, allowing it to deliver better performance for the critical topics.
+
+There are at least three ways to implement it:
+
+1. Add a gossip flag that marks the gossiped topic as multi-tenant, changing the collision resolution logic. Non-multitenant topics arbitrate against multitenant topics as usual.
+2. Provide a single subject-ID dedicated to all multitenant topics in the network. In this case, multi-tenancy has to be encoded in the topic name, perhaps with the help of a special suffix: `foo/bar*`.
+3. Specify the subject-ID explicitly, effectively pinning the topic to the specified subject-ID without the uniqueness constraint like in ordinary pinned topics: `1234/foo/bar` -- sits on subject-ID 1234. Such pinning can be constrained to the same range as ordinary pinned topics: 0..8184 or whatever is chosen in the end.
 
 
 ## Changes to the transport libraries: libudpard, libcanard, libserard, etc.
