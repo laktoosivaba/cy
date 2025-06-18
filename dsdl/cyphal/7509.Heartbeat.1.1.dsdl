@@ -60,7 +60,7 @@ uint32 topic_evictions
 void8  # This may be used later if the eviction counter needs to be widened.
 
 int7 topic_log_age
-# floor(log2(age)), where age is the approximate logical age of the topic; special case: floor(log2(age))=-1.
+# floor(log2(age)), where age is the approximate logical age of the topic; special case: floor(log2(0))=-1.
 # The logical age increases when the topic is gossiped, and when a valid transfer is received on it.
 # Topics with greater age win arbitration, thus ensuring stability of the network when new topics/nodes appear.
 # Valid values are in the range [-1, 63]; -1 represents a brand new topic.
