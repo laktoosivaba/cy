@@ -126,9 +126,9 @@ void udp_wrapper_rx_close(udp_wrapper_rx_t* const self);
 ///
 /// The recommended usage pattern is to keep parallel arrays of handle pointers and some context data, e.g.:
 ///
-///     struct udp_wrapper_tx_t* tx_handles[UDPARD_IFACE_COUNT_MAX];
-///     struct udp_wrapper_rx_t* rx_handles[max_rx_handles];
-///     struct void* rx_context[max_rx_handles];                // Parallel array of context data.
+///     udp_wrapper_tx_t* tx_handles[UDPARD_IFACE_COUNT_MAX];
+///     udp_wrapper_rx_t* rx_handles[max_rx_handles];
+///     void* rx_context[max_rx_handles];                // Parallel array of context data.
 ///     int16_t err = udp_wrapper_wait(timeout_us, UDPARD_IFACE_COUNT_MAX, tx_handles, max_rx_handles, rx_handles);
 ///     // Then handle the results.
 int16_t udp_wrapper_wait(const int64_t            timeout_us,

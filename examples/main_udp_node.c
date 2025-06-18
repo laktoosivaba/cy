@@ -190,7 +190,7 @@ static void on_msg_trace(cy_t* const cy, const cy_arrival_t* const arv)
                                         arv->topic, //
                                         arv->transfer->timestamp + 1000000,
                                         arv->transfer->metadata,
-                                        (struct cy_buffer_borrowed_t){ .view = { .data = ":3", .size = 2 } });
+                                        (cy_buffer_borrowed_t){ .view = { .data = ":3", .size = 2 } });
         if (err != CY_OK) {
             fprintf(stderr, "cy_respond: %d\n", err);
         }
@@ -324,7 +324,7 @@ int main(const int argc, char* argv[])
                       cy_publish(cy,
                                  &publishers[i],
                                  now + 100000,
-                                 (struct cy_buffer_borrowed_t){ .view = { .data = msg, .size = strlen(msg) } },
+                                 (cy_buffer_borrowed_t){ .view = { .data = msg, .size = strlen(msg) } },
                                  now + 1000000,
                                  &futures[i]);
                     if (pub_res != CY_OK) {

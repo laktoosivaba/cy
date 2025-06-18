@@ -115,8 +115,8 @@ int main(const int argc, char* argv[])
 
         // Process the next chunk.
         struct file_read_response_t resp;
-        const size_t                resp_size = cy_buffer_owned_gather(future.last_response.payload,
-                                                        (struct cy_bytes_mut_t){ .size = sizeof(resp), .data = &resp });
+        const size_t                resp_size =
+          cy_buffer_owned_gather(future.last_response.payload, (cy_bytes_mut_t){ .size = sizeof(resp), .data = &resp });
         if (resp_size < 6) {
             errx(0, "Invalid response size %zu", resp_size);
         }

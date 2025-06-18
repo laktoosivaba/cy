@@ -317,10 +317,6 @@ struct cy_platform_t
 /// - cy_publish() -- user transfers only.
 /// - cy_respond() -- user transfers only.
 /// Creation of a new topic may cause resubscription of any existing topics (all in the worst case).
-///
-/// TODO: Use a form of leaky bucket to allow unscheduled heartbeats on collision/divergence,
-/// and at the same time limit the worst case bursts. Say, we could be limited to 10 heartbeats per second
-/// and by default publish 1 heartbeat per second.
 struct cy_t
 {
     const cy_platform_t* platform; ///< Never NULL.

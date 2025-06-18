@@ -61,7 +61,7 @@ static bool is_valid_ip(const uint32_t ip)
 
 static void* mem_alloc(void* const user, const size_t size)
 {
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)user;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)user;
     void* const           out    = malloc(size);
     if (size > 0) {
         if (out != NULL) {
@@ -75,7 +75,7 @@ static void* mem_alloc(void* const user, const size_t size)
 
 static void mem_free(void* const user, const size_t size, void* const pointer)
 {
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)user;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)user;
     (void)size;
     if (pointer != NULL) {
         assert(cy_udp->mem_allocated_fragments > 0);
@@ -179,7 +179,7 @@ static uint64_t platform_prng(const cy_t* const cy)
 
 static void platform_buffer_release(cy_t* const cy, const cy_buffer_owned_t buf)
 {
-    const cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    const cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     static_assert(sizeof(struct UdpardFragment) == sizeof(cy_buffer_owned_t), "");
     static_assert(offsetof(struct UdpardFragment, next) == offsetof(cy_buffer_owned_t, base.next), "");
     static_assert(offsetof(struct UdpardFragment, view) == offsetof(cy_buffer_owned_t, base.view), "");
@@ -192,7 +192,7 @@ static cy_err_t platform_node_id_set(cy_t* const cy)
 {
     assert(cy != NULL);
     assert(cy->node_id <= UDPARD_NODE_ID_MAX);
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     // The udpard tx pipeline has a node-ID pointer that already points into the cy_t structure,
     // so it does not require updating. We need to reconfigure the RPC plane though.
 
@@ -237,7 +237,7 @@ static cy_err_t platform_node_id_set(cy_t* const cy)
 static void platform_node_id_clear(cy_t* const cy)
 {
     assert(cy != NULL);
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
 
     // Turn off the RPC plane. Close the sockets and stop the RPC ports. The RPC dispatcher holds no resources.
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
@@ -256,7 +256,7 @@ static void platform_node_id_clear(cy_t* const cy)
 static cy_bloom64_t* platform_node_id_bloom(cy_t* const cy)
 {
     assert(cy != NULL);
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     return &cy_udp->node_id_bloom;
 }
 
@@ -267,7 +267,7 @@ static cy_err_t platform_p2p(cy_t* const                  cy,
                              const cy_buffer_borrowed_t   payload)
 {
     CY_BUFFER_GATHER_ON_STACK(linear_payload, payload);
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     cy_err_t              res    = CY_OK;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         if (cy_udp->tx[i].udpard_tx.queue_capacity > 0) {
@@ -292,9 +292,8 @@ static cy_err_t platform_p2p(cy_t* const                  cy,
 
 static cy_topic_t* platform_topic_new(cy_t* const cy)
 {
-    const cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
-    cy_udp_posix_topic_t* const topic =
-      (struct cy_udp_posix_topic_t*)mem_alloc(cy, sizeof(struct cy_udp_posix_topic_t));
+    const cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
+    cy_udp_posix_topic_t* const topic  = (cy_udp_posix_topic_t*)mem_alloc(cy, sizeof(cy_udp_posix_topic_t));
     if (topic != NULL) {
         memset(topic, 0, sizeof(cy_udp_posix_topic_t));
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
@@ -307,7 +306,7 @@ static cy_topic_t* platform_topic_new(cy_t* const cy)
 
 static void platform_topic_destroy(cy_t* const cy, cy_topic_t* const topic)
 {
-    cy_udp_posix_topic_t* const udp_topic = (struct cy_udp_posix_topic_t*)topic;
+    cy_udp_posix_topic_t* const udp_topic = (cy_udp_posix_topic_t*)topic;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         udp_wrapper_rx_close(&udp_topic->sock_rx[i]);
     }
@@ -321,7 +320,7 @@ static cy_err_t platform_topic_publish(cy_t* const                cy,
                                        const cy_buffer_borrowed_t payload)
 {
     CY_BUFFER_GATHER_ON_STACK(linear_payload, payload);
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     cy_err_t              res    = CY_OK;
     for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
         if (cy_udp->tx[i].udpard_tx.queue_capacity > 0) {
@@ -347,8 +346,8 @@ static cy_err_t platform_topic_subscribe(cy_t* const                    cy,
                                          cy_topic_t* const              cy_topic,
                                          const cy_subscription_params_t params)
 {
-    cy_udp_posix_topic_t* const topic  = (struct cy_udp_posix_topic_t*)cy_topic;
-    const cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_topic_t* const topic  = (cy_udp_posix_topic_t*)cy_topic;
+    const cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
 
     // Set up the udpard subscription. This does not yet allocate any resources.
     cy_err_t res = err_from_udpard(udpardRxSubscriptionInit(&topic->sub, //
@@ -397,7 +396,7 @@ static void platform_topic_advertise(cy_t* const       cy,
                                      const size_t      response_extent_with_overhead)
 {
     (void)cy_topic;
-    cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
+    cy_udp_posix_t* const cy_udp = (cy_udp_posix_t*)cy;
     if (response_extent_with_overhead > cy_udp->response_extent_with_overhead) {
         cy_udp->response_extent_with_overhead = response_extent_with_overhead;
         CY_TRACE(&cy_udp->base, //
@@ -713,7 +712,7 @@ static cy_err_t spin_once_until(cy_udp_posix_t* const cy_udp, const cy_us_t dead
     udp_wrapper_rx_t*     rx_await[max_rx_count]; // Initialization is not possible and is very wasteful anyway.
     cy_udp_posix_topic_t* rx_topics[max_rx_count];
     uint_fast8_t          rx_iface_indexes[max_rx_count];
-    for (cy_udp_posix_topic_t* topic = (struct cy_udp_posix_topic_t*)cy_topic_iter_first(&cy_udp->base); topic != NULL;
+    for (cy_udp_posix_topic_t* topic = (cy_udp_posix_topic_t*)cy_topic_iter_first(&cy_udp->base); topic != NULL;
          topic                       = (cy_udp_posix_topic_t*)cy_topic_iter_next(&topic->base)) {
         if (topic->base.couplings != NULL) {
             for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
