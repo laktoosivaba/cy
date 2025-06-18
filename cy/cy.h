@@ -103,7 +103,6 @@ typedef struct cy_bytes_mut_t           cy_bytes_mut_t;
 typedef struct cy_buffer_borrowed_t     cy_buffer_borrowed_t;
 typedef struct cy_buffer_owned_t        cy_buffer_owned_t;
 typedef struct cy_tree_t                cy_tree_t;
-typedef struct cy_bloom64_t             cy_bloom64_t;
 typedef struct cy_transfer_metadata_t   cy_transfer_metadata_t;
 typedef struct cy_transfer_owned_t      cy_transfer_owned_t;
 typedef struct cy_publisher_t           cy_publisher_t;
@@ -170,14 +169,6 @@ struct cy_tree_t
     cy_tree_t*  up;
     cy_tree_t*  lr[2];
     int_fast8_t bf;
-};
-
-/// An ordinary Bloom filter with 64-bit words.
-struct cy_bloom64_t
-{
-    size_t    n_bits;   ///< The total number of bits in the filter, a multiple of 64.
-    size_t    popcount; ///< (popcount <= n_bits)
-    uint64_t* storage;
 };
 
 struct cy_transfer_metadata_t

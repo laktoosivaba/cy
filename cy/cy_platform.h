@@ -48,6 +48,7 @@ extern "C"
 #endif
 
 #ifndef __cplusplus
+typedef struct cy_bloom64_t  cy_bloom64_t;
 typedef struct cy_platform_t cy_platform_t;
 #endif
 
@@ -55,6 +56,14 @@ typedef struct cy_platform_t cy_platform_t;
 /// The response user data is prefixed with 8 bytes of the full topic hash to which we are responding.
 /// The receiver of the response will be able to match the response with a specific request using the transfer-ID.
 #define CY_P2P_SERVICE_ID_TOPIC_RESPONSE 510
+
+/// An ordinary Bloom filter with 64-bit words.
+struct cy_bloom64_t
+{
+    size_t    n_bits;   ///< The total number of bits in the filter, a multiple of 64.
+    size_t    popcount; ///< (popcount <= n_bits)
+    uint64_t* storage;
+};
 
 /// This is the base type that is extended by the platform layer with transport- and platform-specific entities,
 /// such as socket handles, etc. Instantiation is therefore done inside the platform layer in the heap or some
