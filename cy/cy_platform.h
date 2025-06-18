@@ -20,7 +20,7 @@
 /// Only for testing and debugging purposes.
 /// All nodes obviously must use the same heartbeat topic, which is why it is pinned.
 #ifndef CY_CONFIG_HEARTBEAT_TOPIC_NAME
-#define CY_CONFIG_HEARTBEAT_TOPIC_NAME "/7509"
+#define CY_CONFIG_HEARTBEAT_TOPIC_NAME "/@/7509"
 #endif
 
 /// Only for testing and debugging purposes.
@@ -67,6 +67,19 @@ extern "C"
 /// digits of the vendor ID, product ID, and instance ID of the node.
 /// Repeated and trailing slashes are removed.
 ///
+/// A topic that is only used by pattern subscriptions (like `ins/?/data/*`, without publishers or verbatim
+/// subscriptions) is called a mortal topic. Such topics are automatically retired when they see no traffic and
+/// no gossips from publishers or receiving subscribers for mortal_topic_timeout.
+/// This is needed to prevent automatic pattern subscriptions from lingering forever when all publishers are gone.
+/// See https://github.com/pavel-kirienko/cy/issues/15.
+///
+/// Notably, the last gossip time is NOT updated when we receive a gossip from another node.
+/// While this approach can reduce redundant gossip traffic (no need to publish a gossip when the network just saw it),
+/// it can lead to issues if the network is semi-partitioned such that the local node straddles multiple partitions.
+/// This could occur in packet switched networks or if redundant interfaces are used. Such coordinated publishing
+/// can naturally settle on a stable state where some nodes become responsible for publishing specific topics,
+/// and nodes that happen to be in a different partition will never see those topics.
+///
 /// CRDT merge rules, first rule takes precedence:
 /// - on collision (same subject-ID, different hash):
 ///     1. winner is pinned;
@@ -81,7 +94,7 @@ struct cy_topic_t
 {
     struct cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
     struct cy_tree_t index_subject_id;
-    struct cy_tree_t index_gossip_time;
+    struct cy_tree_t index_gossip_order;
 
     struct wkv_node_t* index_name;
 
@@ -124,37 +137,21 @@ struct cy_topic_t
     /// [max(x,max(y,z))==max(max(x,y),z)], and idempotent [max(x,x)==x], making it a valid merge operation.
     uint64_t age;
 
-    /// This is used to implement the once-per-second age increment rule.
-    cy_us_t aged_at;
+    /// Event timestamps used for state management.
+    cy_us_t ts_aged;      ///< Age last incremented at this time.
+    cy_us_t ts_gossiped;  ///< Gossip last published at this time.
+    cy_us_t ts_received;  ///< Transfer last received at this time.
+    cy_us_t ts_testified; ///< Gossip received at this time, except gossips from subscribers that receive no transfers.
 
-    /// Updated whenever the topic is gossiped.
-    ///
-    /// Notably, this is NOT updated when we receive a gossip from another node. While this approach can reduce
-    /// redundant gossip traffic (no need to publish a gossip when the network just saw it), it can also lead to
-    /// issues if the network is semi-partitioned such that the local node straddles multiple partitions.
-    /// This could occur in packet switched networks or if redundant interfaces are used. Such coordinated publishing
-    /// can naturally settle on a stable state where some nodes become responsible for publishing specific topics,
-    /// and nodes that happen to be in a different partition will never see those topics.
-    cy_us_t last_gossip;
+    /// The next topic to gossip is chosen with the highest priority, then with the lowest ts_gossiped.
+    /// Topics with zero priority are gossiped at the max gossip period; others force the min period.
+    /// Once a gossip is published, the priority is reset to the minimum.
+    uint_fast8_t gossip_priority;
 
-    /// Time when this topic last saw a conflict (another topic occupying its subject-ID) or a divergence
-    /// (same topic elsewhere using a different subject-ID), even if the local entry was not affected
-    /// (meaning that this timestamp is updated regardless of whether the local topic won arbitration).
-    ///
-    /// The purpose of this timestamp is to provide the local application with a topic stability metric:
-    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
-    /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
-    /// node using this topic has joined and had to catch up.
-    cy_us_t last_event_ts;
-
-    /// Time when this topic last had to be locally moved to another subject-ID due to a conflict
-    /// (another topic occupying its subject-ID) or a divergence (same topic elsewhere using a different subject-ID).
-    /// Events affecting other nodes are not considered here, meaning that this is updated only if the local topic
-    /// loses arbitration.
-    ///
-    /// The purpose of this timestamp is to provide the local application with a topic stability metric:
-    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
-    cy_us_t last_local_event_ts;
+    /// Mortal topics are ordered by last animation time, which is used to determine which topic to retire next.
+    /// Mortal topics are distinguished from ordinary topics by being in the list.
+    struct cy_topic_t* mortal_next;
+    struct cy_topic_t* mortal_prev;
 
     /// Used for matching futures against received responses.
     struct cy_tree_t* futures_by_transfer_id;
@@ -167,7 +164,7 @@ struct cy_topic_t
 
     /// Only used if the application subscribes on this topic.
     struct cy_topic_coupling_t* couplings;
-    bool subscribed; ///< May be (tentatively) false even with subscribers!=NULL on resubscription error.
+    bool subscribed; ///< May be (tentatively) false even with couplings!=NULL on resubscription error.
 };
 
 /// Returns the current monotonic time in microseconds. The initial time shall be non-negative.
@@ -336,37 +333,31 @@ struct cy_t
     /// Zero is not a valid UID.
     uint64_t uid;
     uint16_t node_id;
-    cy_us_t  started_at;
 
-    /// Time when this node last saw a conflict (another topic occupying its subject-ID) or a divergence
-    /// (same topic elsewhere using a different subject-ID) involving any of its topics,
-    /// even if the local topic was not affected (meaning that this timestamp is updated regardless of whether
-    /// the local topic won arbitration).
-    ///
-    /// The purpose of this timestamp is to provide the local application with a network stability metric:
-    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state;
-    /// if it changed (it can only increase), it means that there was either a disturbance somewhere, or a new
-    /// node using any of our topics has joined and had to catch up.
-    cy_us_t last_event_ts;
-
-    /// Time when any of the local topics last had to be locally moved to another subject-ID due to a conflict
-    /// (another topic occupying its subject-ID) or a divergence (same topic elsewhere using a different subject-ID).
-    /// Events affecting other nodes are not considered here, meaning that this is updated only if the local topic
-    /// loses arbitration.
-    ///
-    /// The purpose of this timestamp is to provide the local application with a network stability metric:
-    /// if this value is sufficiently far in the past, the network could be said to have reached a stable state.
-    cy_us_t last_local_event_ts;
+    /// Various timestamps used for state management.
+    cy_us_t ts_started;
+    cy_us_t ts_event;
+    cy_us_t ts_local_event;
 
     /// Set from cy_notify_node_id_collision(). The actual handling is delayed.
     bool node_id_collision;
 
+    /// See the topic definition.
+    /// Most recently animated mortal topics at at the head of the list.
+    cy_us_t            mortal_topic_timeout;
+    struct cy_topic_t* mortal_head;
+    struct cy_topic_t* mortal_tail;
+
     /// Heartbeat topic and related items.
     /// The heartbeat period can be changed at any time, but it must not exceed 1 second.
+    /// The max period is used when there are no urgent gossips or scout responses to publish;
+    /// otherwise, the min period is used to throttle the heartbeat traffic.
     struct cy_publisher_t  heartbeat_pub;
     struct cy_subscriber_t heartbeat_sub;
     cy_us_t                heartbeat_next;
-    cy_us_t                heartbeat_period;
+    cy_us_t                heartbeat_last;
+    cy_us_t                heartbeat_period_max; ///< Not greater than 1 second.
+    cy_us_t                heartbeat_period_min; ///< Not greater than heartbeat_period_max.
 
     /// Topics have multiple indexes.
     struct cy_tree_t* topics_by_hash;

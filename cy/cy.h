@@ -61,8 +61,7 @@ extern "C"
 #define CY_SUBJECT_BITS        13U
 #define CY_TOTAL_SUBJECT_COUNT (1UL << CY_SUBJECT_BITS)
 
-#define CY_SUBJECT_ID_INVALID 0xFFFFU
-#define CY_NODE_ID_INVALID    0xFFFFU
+#define CY_NODE_ID_INVALID 0xFFFFU
 
 #define CY_PASTE_(a, b) a##b
 #define CY_PASTE(a, b)  CY_PASTE_(a, b)
@@ -91,9 +90,8 @@ extern "C"
 #define CY_ERR_ARGUMENT 2
 #define CY_ERR_MEMORY   3
 #define CY_ERR_CAPACITY 4
-#define CY_ERR_JOIN     5
-#define CY_ERR_NAME     6
-#define CY_ERR_MEDIA    7
+#define CY_ERR_NAME     5
+#define CY_ERR_MEDIA    6
 
 typedef uint_fast8_t cy_err_t;
 typedef int64_t      cy_us_t; ///< Monotonic microsecond timestamp. Signed to permit arithmetics in the past.
@@ -255,10 +253,10 @@ static inline cy_err_t cy_advertise_c(struct cy_t* const           cy,
 {
     return cy_advertise(cy, pub, wkv_key(name), response_extent);
 }
-void cy_unadvertise(struct cy_t* const cy, const struct cy_publisher_t* pub);
+void cy_unadvertise(struct cy_t* const cy, struct cy_publisher_t* pub);
 
 /// Just a convenience function, nothing special.
-/// The intial future state is cy_future_fresh.
+/// The initial future state is cy_future_fresh.
 void cy_future_new(struct cy_future_t* const future, const cy_future_callback_t callback, void* const user);
 
 /// This needs not be done after a future completes normally. It is only needed if the future needs to be
