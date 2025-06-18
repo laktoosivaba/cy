@@ -12,7 +12,7 @@
 #include "cy_platform.h"
 
 #define CAVL2_RELATION int32_t
-#define CAVL2_T        struct cy_tree_t
+#define CAVL2_T        cy_tree_t
 #include <cavl2.h>
 
 #define RAPIDHASH_COMPACT // because we hash strings <96 bytes long
@@ -65,14 +65,14 @@ static uint64_t pow2(const int_fast8_t exp)
     return 1ULL << exp;
 }
 
-static uint64_t random_u64(const struct cy_t* const cy)
+static uint64_t random_u64(const cy_t* const cy)
 {
     const uint64_t seed[2] = { cy->platform->prng(cy), cy->uid };
     return rapidhash(seed, sizeof(seed));
 }
 
 /// The limits are inclusive. Returns min unless min < max.
-static uint64_t random_uint(const struct cy_t* const cy, const uint64_t min, const uint64_t max)
+static uint64_t random_uint(const cy_t* const cy, const uint64_t min, const uint64_t max)
 {
     if (min < max) {
         return (random_u64(cy) % (max - min)) + min;
@@ -81,17 +81,17 @@ static uint64_t random_uint(const struct cy_t* const cy, const uint64_t min, con
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static void* wkv_realloc(struct wkv_t* const self, void* ptr, const size_t new_size)
+static void* wkv_realloc(wkv_t* const self, void* ptr, const size_t new_size)
 {
-    return ((struct cy_t*)self->context)->platform->realloc((struct cy_t*)self->context, ptr, new_size);
+    return ((cy_t*)self->context)->platform->realloc((cy_t*)self->context, ptr, new_size);
 }
 
-static void* mem_alloc(struct cy_t* const cy, const size_t size)
+static void* mem_alloc(cy_t* const cy, const size_t size)
 {
     return cy->platform->realloc(cy, NULL, size);
 }
 
-static void mem_free(struct cy_t* const cy, void* ptr)
+static void mem_free(cy_t* const cy, void* ptr)
 {
     if (ptr != NULL) {
         cy->platform->realloc(cy, ptr, 0);
@@ -99,7 +99,7 @@ static void mem_free(struct cy_t* const cy, void* ptr)
 }
 
 /// Simply returns the value of the first hit. Useful for existence checks.
-static void* wkv_cb_first(const struct wkv_event_t evt)
+static void* wkv_cb_first(const wkv_event_t evt)
 {
     return evt.node->value;
 }
@@ -154,42 +154,42 @@ static bool resolve_name(const char* const ns, const char* const user, const cha
 //                                                  AVL TREE UTILITIES
 // =====================================================================================================================
 
-static int32_t cavl_comp_topic_hash(const void* const user, const struct cy_tree_t* const node)
+static int32_t cavl_comp_topic_hash(const void* const user, const cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const uint64_t                 outer = *(uint64_t*)user;
-    const struct cy_topic_t* const inner = (const struct cy_topic_t*)node;
+    const uint64_t          outer = *(uint64_t*)user;
+    const cy_topic_t* const inner = (const struct cy_topic_t*)node;
     if (outer == inner->hash) {
         return 0;
     }
     return (outer >= inner->hash) ? +1 : -1;
 }
 
-static int32_t cavl_comp_topic_subject_id(const void* const user, const struct cy_tree_t* const node)
+static int32_t cavl_comp_topic_subject_id(const void* const user, const cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const struct cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_subject_id);
+    const cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_subject_id);
     return (int32_t)(*(uint16_t*)user) - ((int32_t)cy_topic_subject_id(inner));
 }
 
 /// Gossip times are not unique, so this comparator never returns 0.
 /// Leftmost node has the highest priority, then the lowest gossip time.
-static int32_t cavl_comp_topic_gossip_order(const void* const user, const struct cy_tree_t* const node)
+static int32_t cavl_comp_topic_gossip_order(const void* const user, const cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const struct cy_topic_t* const outer = (const struct cy_topic_t*)user;
-    const struct cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_gossip_order);
+    const cy_topic_t* const outer = (const struct cy_topic_t*)user;
+    const cy_topic_t* const inner = CAVL2_TO_OWNER(node, struct cy_topic_t, index_gossip_order);
     if (outer->gossip_priority != inner->gossip_priority) {
         return (outer->gossip_priority > inner->gossip_priority) ? -1 : +1;
     }
     return (outer->ts_gossiped >= inner->ts_gossiped) ? +1 : -1;
 }
 
-static int32_t cavl_comp_future_transfer_id_masked(const void* const user, const struct cy_tree_t* const node)
+static int32_t cavl_comp_future_transfer_id_masked(const void* const user, const cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const uint64_t                  outer = *(uint64_t*)user;
-    const struct cy_future_t* const inner = CAVL2_TO_OWNER(node, struct cy_future_t, index_transfer_id);
+    const uint64_t           outer = *(uint64_t*)user;
+    const cy_future_t* const inner = CAVL2_TO_OWNER(node, struct cy_future_t, index_transfer_id);
     if (outer == inner->transfer_id_masked) {
         return 0;
     }
@@ -197,31 +197,31 @@ static int32_t cavl_comp_future_transfer_id_masked(const void* const user, const
 }
 
 /// Deadlines are not unique, so this comparator never returns 0.
-static int32_t cavl_comp_future_deadline(const void* const user, const struct cy_tree_t* const node)
+static int32_t cavl_comp_future_deadline(const void* const user, const cy_tree_t* const node)
 {
     assert((user != NULL) && (node != NULL));
-    const struct cy_future_t* const inner = CAVL2_TO_OWNER(node, struct cy_future_t, index_deadline);
+    const cy_future_t* const inner = CAVL2_TO_OWNER(node, struct cy_future_t, index_deadline);
     return ((*(cy_us_t*)user) >= inner->deadline) ? +1 : -1;
 }
 
-static struct cy_tree_t* cavl_factory_future_transfer_id(void* const user)
+static cy_tree_t* cavl_factory_future_transfer_id(void* const user)
 {
-    return &((struct cy_future_t*)user)->index_transfer_id;
+    return &((cy_future_t*)user)->index_transfer_id;
 }
 
-static struct cy_tree_t* cavl_factory_future_deadline(void* const user)
+static cy_tree_t* cavl_factory_future_deadline(void* const user)
 {
-    return &((struct cy_future_t*)user)->index_deadline;
+    return &((cy_future_t*)user)->index_deadline;
 }
 
-static struct cy_tree_t* cavl_factory_topic_subject_id(void* const user)
+static cy_tree_t* cavl_factory_topic_subject_id(void* const user)
 {
-    return &((struct cy_topic_t*)user)->index_subject_id;
+    return &((cy_topic_t*)user)->index_subject_id;
 }
 
-static struct cy_tree_t* cavl_factory_topic_gossip_order(void* const user)
+static cy_tree_t* cavl_factory_topic_gossip_order(void* const user)
 {
-    return &((struct cy_topic_t*)user)->index_gossip_order;
+    return &((cy_topic_t*)user)->index_gossip_order;
 }
 
 // =====================================================================================================================
@@ -232,7 +232,7 @@ static struct cy_tree_t* cavl_factory_topic_gossip_order(void* const user)
 
 /// A Bloom filter is a set-only structure so there is no way to clear a bit after it has been set.
 /// It is only possible to purge the entire filter state.
-static void bloom64_set(struct cy_bloom64_t* const bloom, const size_t value)
+static void bloom64_set(cy_bloom64_t* const bloom, const size_t value)
 {
     assert(bloom != NULL);
     const size_t   index = value % bloom->n_bits;
@@ -244,14 +244,14 @@ static void bloom64_set(struct cy_bloom64_t* const bloom, const size_t value)
     assert(bloom->popcount <= bloom->n_bits);
 }
 
-static bool bloom64_get(const struct cy_bloom64_t* const bloom, const size_t value)
+static bool bloom64_get(const cy_bloom64_t* const bloom, const size_t value)
 {
     assert(bloom != NULL);
     const size_t index = value % bloom->n_bits;
     return (bloom->storage[index / 64U] & (1ULL << (index % 64U))) != 0;
 }
 
-static void bloom64_purge(struct cy_bloom64_t* const bloom)
+static void bloom64_purge(cy_bloom64_t* const bloom)
 {
     assert(bloom != NULL);
     for (size_t i = 0; i < (bloom->n_bits + 63U) / 64U; i++) { // dear compiler please unroll this
@@ -276,7 +276,7 @@ static void bloom64_purge(struct cy_bloom64_t* const bloom)
 /// simply limit the node-ID allocation range to [0, 125], and thus ensure the reserved IDs are not used;
 /// all other transports that use much wider node-ID range (which is [0, 65534]) can just disregard the reservation
 /// because the likelihood of picking the reserved IDs is negligible, and the consequences of doing so are very minor.
-static uint16_t pick_node_id(const struct cy_t* const cy, struct cy_bloom64_t* const bloom, const uint16_t node_id_max)
+static uint16_t pick_node_id(const cy_t* const cy, cy_bloom64_t* const bloom, const uint16_t node_id_max)
 {
     // The algorithm is hierarchical: find a 64-bit word that has at least one zero bit, then find a zero bit in it.
     // This somewhat undermines the randomness of the result, but it is always fast.
@@ -317,11 +317,11 @@ static uint16_t pick_node_id(const struct cy_t* const cy, struct cy_bloom64_t* c
 
 /// If the local node still has no node-ID, this function will allocate one on the spot.
 /// May fail if the underlying platform->node_id_set() fails.
-static cy_err_t ensure_joined(struct cy_t* const cy)
+static cy_err_t ensure_joined(cy_t* const cy)
 {
     cy_err_t res = CY_OK;
     if (cy->node_id >= cy->platform->node_id_max) {
-        struct cy_bloom64_t* const bloom = cy->platform->node_id_bloom(cy);
+        cy_bloom64_t* const bloom = cy->platform->node_id_bloom(cy);
         assert((bloom != NULL) && (bloom->n_bits > 0) && ((bloom->n_bits % 64) == 0) &&
                (bloom->popcount <= bloom->n_bits));
         cy->node_id = pick_node_id(cy, bloom, cy->platform->node_id_max);
@@ -344,13 +344,13 @@ static cy_err_t ensure_joined(struct cy_t* const cy)
 
 struct cy_subscriber_root_t
 {
-    struct wkv_node_t* index_name;
-    struct wkv_node_t* index_pattern; ///< NULL if this is a verbatim subscriber.
+    wkv_node_t* index_name;
+    wkv_node_t* index_pattern; ///< NULL if this is a verbatim subscriber.
 
     /// If this is a pattern subscriber, we will need to publish a scout message.
     struct cy_subscriber_root_t* next_scout;
 
-    struct cy_subscriber_t* head;
+    cy_subscriber_t* head;
 };
 
 /// A single topic may match multiple subscribers if patterns are used.
@@ -360,11 +360,11 @@ struct cy_topic_coupling_t
     struct cy_subscriber_root_t* root;
     struct cy_topic_coupling_t*  next;
 
-    size_t                   substitution_count;               ///< The size of the following substitutions flex array.
-    struct cy_substitution_t substitutions[CY_TOPIC_NAME_MAX]; ///< Flex array.
+    size_t            substitution_count;               ///< The size of the following substitutions flex array.
+    cy_substitution_t substitutions[CY_TOPIC_NAME_MAX]; ///< Flex array.
 };
 
-void topic_destroy(struct cy_t* const cy, struct cy_topic_t* const topic)
+void topic_destroy(cy_t* const cy, cy_topic_t* const topic)
 {
     assert(cy != NULL);
     assert(topic != NULL);
@@ -378,7 +378,7 @@ static bool is_pinned(const uint64_t hash)
 }
 
 /// This comparator is only applicable on subject-ID allocation conflicts. As such, hashes must be different.
-static bool left_wins(const struct cy_topic_t* const left, const int_fast8_t r_lage, const uint64_t r_hash)
+static bool left_wins(const cy_topic_t* const left, const int_fast8_t r_lage, const uint64_t r_hash)
 {
     assert(left->hash != r_hash);
     const int_fast8_t l_lage = log2_floor(left->age);
@@ -386,24 +386,24 @@ static bool left_wins(const struct cy_topic_t* const left, const int_fast8_t r_l
 }
 
 /// log(N) index update requires removal and reinsertion.
-static void update_gossip_order(struct cy_t* const       cy,
-                                struct cy_topic_t* const topic,
-                                const cy_us_t            ts_gossiped,
-                                const uint_fast8_t       priority)
+static void update_gossip_order(cy_t* const        cy,
+                                cy_topic_t* const  topic,
+                                const cy_us_t      ts_gossiped,
+                                const uint_fast8_t priority)
 {
     assert(cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
     cavl2_remove(&cy->topics_by_gossip_time, &topic->index_gossip_order);
-    topic->gossip_priority             = priority;
-    topic->ts_gossiped                 = ts_gossiped;
-    const struct cy_tree_t* const tree = cavl2_find_or_insert(&cy->topics_by_gossip_time, //
-                                                              topic,
-                                                              cavl_comp_topic_gossip_order,
-                                                              topic,
-                                                              cavl_factory_topic_gossip_order);
+    topic->gossip_priority      = priority;
+    topic->ts_gossiped          = ts_gossiped;
+    const cy_tree_t* const tree = cavl2_find_or_insert(&cy->topics_by_gossip_time, //
+                                                       topic,
+                                                       cavl_comp_topic_gossip_order,
+                                                       topic,
+                                                       cavl_factory_topic_gossip_order);
     assert(tree == &topic->index_gossip_order);
 }
 
-static void prioritize_gossip(struct cy_t* const cy, struct cy_topic_t* const topic, uint_fast8_t priority)
+static void prioritize_gossip(cy_t* const cy, cy_topic_t* const topic, uint_fast8_t priority)
 {
     assert(cy->topics_by_gossip_time != NULL); // This index is never empty if we have topics
     // Priority fine-tuning:
@@ -425,7 +425,7 @@ static void prioritize_gossip(struct cy_t* const cy, struct cy_topic_t* const to
 }
 
 /// A first-principles check to see if the topic is mortal. Scans all couplings, slow.
-static bool validate_is_mortal(const struct cy_topic_t* const topic)
+static bool validate_is_mortal(const cy_topic_t* const topic)
 {
     if (topic->pub_count > 0) {
         return false;
@@ -440,7 +440,7 @@ static bool validate_is_mortal(const struct cy_topic_t* const topic)
     return true;
 }
 
-static bool is_mortal(const struct cy_t* const cy, const struct cy_topic_t* const topic)
+static bool is_mortal(const cy_t* const cy, const cy_topic_t* const topic)
 {
     assert((cy->mortal_head != NULL) == (cy->mortal_tail != NULL));
     const bool out = (topic->mortal_next != NULL) || (topic->mortal_prev != NULL) || (cy->mortal_head == topic);
@@ -449,7 +449,7 @@ static bool is_mortal(const struct cy_t* const cy, const struct cy_topic_t* cons
 
 /// Remove the topic from the doubly-linked list of mortal topics. Does nothing if the topic is not enlisted.
 /// Returns true if the topic was enlisted, false otherwise.
-static void mortal_delist(struct cy_t* const cy, struct cy_topic_t* const topic)
+static void mortal_delist(cy_t* const cy, cy_topic_t* const topic)
 {
     assert(is_mortal(cy, topic));
     if (topic->mortal_next != NULL) {
@@ -471,7 +471,7 @@ static void mortal_delist(struct cy_t* const cy, struct cy_topic_t* const topic)
 
 /// Add the topic to the head of doubly-linked list of mortal topics.
 /// The oldest mortal topic will be eventually pushed to the tail of the list.
-static void mortal_enlist(struct cy_t* const cy, struct cy_topic_t* const topic)
+static void mortal_enlist(cy_t* const cy, cy_topic_t* const topic)
 {
     assert((topic->mortal_next == NULL) && (topic->mortal_prev == NULL));
     assert((cy->mortal_head != NULL) == (cy->mortal_tail != NULL));
@@ -489,7 +489,7 @@ static void mortal_enlist(struct cy_t* const cy, struct cy_topic_t* const topic)
 
 /// Move the topic to the head of the doubly-linked list of mortal topics.
 /// The oldest mortal topic will be eventually pushed to the tail of the list.
-static void mortal_animate(struct cy_t* const cy, struct cy_topic_t* const topic)
+static void mortal_animate(cy_t* const cy, cy_topic_t* const topic)
 {
     if (is_mortal(cy, topic)) {
         mortal_delist(cy, topic); // move to the head of the list
@@ -498,9 +498,9 @@ static void mortal_animate(struct cy_t* const cy, struct cy_topic_t* const topic
 }
 
 /// Retires at most one at every call.
-static void mortal_retire_timed_out(struct cy_t* const cy, const cy_us_t now)
+static void mortal_retire_timed_out(cy_t* const cy, const cy_us_t now)
 {
-    struct cy_topic_t* const topic = cy->mortal_tail;
+    cy_topic_t* const topic = cy->mortal_tail;
     if (topic != NULL) {
         assert(is_mortal(cy, topic) && validate_is_mortal(topic));
         const bool rx_feed_alive = (topic->ts_received + cy->mortal_topic_timeout) >= now;
@@ -518,7 +518,7 @@ static void mortal_retire_timed_out(struct cy_t* const cy, const cy_us_t now)
 /// A valid form is: "@/1234".
 /// Pinned topic names must have only canonical names to ensure that no two topic names map to the same subject-ID.
 /// The only requirement to ensure this is that there must be no leading zeros in the number.
-static uint32_t parse_pinned(const struct wkv_str_t s)
+static uint32_t parse_pinned(const wkv_str_t s)
 {
     if ((s.len < 3) || (s.len > 6) || (s.str[0] != '@') || (s.str[1] != '/') || (s.str[2] == '0')) {
         return UINT32_MAX; // Leading zeroes not accepted; only canonical form.
@@ -536,7 +536,7 @@ static uint32_t parse_pinned(const struct wkv_str_t s)
 /// The topic hash is the key component of the protocol.
 /// For pinned topics, hash<CY_TOTAL_SUBJECT_COUNT.
 /// The probability of a random hash falling into the pinned range is ~4.44e-16, or about one in two quadrillion.
-static uint64_t topic_hash(const struct wkv_str_t name)
+static uint64_t topic_hash(const wkv_str_t name)
 {
     uint64_t hash = parse_pinned(name);
     if (hash >= CY_TOTAL_SUBJECT_COUNT) {
@@ -560,14 +560,14 @@ static uint16_t topic_subject_id(const uint64_t hash, const uint32_t evictions)
 
 /// This is linear complexity but we expect to have few subscribers per topic, so it is acceptable.
 /// If this becomes a problem, we can simply store the subscription parameters in the topic fields.
-static struct cy_subscription_params_t deduce_subscription_params(const struct cy_topic_t* const topic)
+static cy_subscription_params_t deduce_subscription_params(const cy_topic_t* const topic)
 {
-    struct cy_subscription_params_t out = { 0, 0 };
+    cy_subscription_params_t out = { 0, 0 };
     // Go over all couplings and all subscribers in each coupling.
     const struct cy_topic_coupling_t* cpl = topic->couplings;
     assert(cpl != NULL);
     while (cpl != NULL) {
-        const struct cy_subscriber_t* sub = cpl->root->head;
+        const cy_subscriber_t* sub = cpl->root->head;
         assert(sub != NULL);
         while (sub != NULL) {
             out.extent              = larger(out.extent, sub->params.extent);
@@ -581,12 +581,12 @@ static struct cy_subscription_params_t deduce_subscription_params(const struct c
 
 /// If a subscription is needed but is not active, this function will attempt to resubscribe.
 /// Errors are handled via the platform handler, so from the caller's perspective this is infallible.
-static void topic_ensure_subscribed(struct cy_t* const cy, struct cy_topic_t* const topic)
+static void topic_ensure_subscribed(cy_t* const cy, cy_topic_t* const topic)
 {
     if ((topic->couplings != NULL) && (!topic->subscribed)) {
-        const struct cy_subscription_params_t params = deduce_subscription_params(topic);
-        const cy_err_t                        res    = cy->platform->topic_subscribe(cy, topic, params);
-        topic->subscribed                            = res == CY_OK;
+        const cy_subscription_params_t params = deduce_subscription_params(topic);
+        const cy_err_t                 res    = cy->platform->topic_subscribe(cy, topic, params);
+        topic->subscribed                     = res == CY_OK;
         CY_TRACE(cy,
                  "🗞️'%s' #%016llx @%04x extent=%zu tid_timeout=%lld result=%d",
                  topic->name,
@@ -608,10 +608,7 @@ static void topic_ensure_subscribed(struct cy_t* const cy, struct cy_topic_t* co
 /// index tree on every iteration, and there may be as many iterations as there are local topics in the theoretical
 /// worst case. The amortized worst case is only O(log(N)) because the topics are sparsely distributed thanks to the
 /// topic hash function, unless there is a large number of topics (~>1000).
-static void topic_allocate(struct cy_t* const       cy,
-                           struct cy_topic_t* const topic,
-                           const uint32_t           new_evictions,
-                           const bool               virgin)
+static void topic_allocate(cy_t* const cy, cy_topic_t* const topic, const uint32_t new_evictions, const bool virgin)
 {
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
 
@@ -652,15 +649,15 @@ static void topic_allocate(struct cy_t* const       cy,
     while (true) {
         assert(iter_count <= cy->topic_count);
         iter_count++;
-        const uint16_t          sid = topic_subject_id(topic->hash, topic->evictions);
-        struct cy_tree_t* const t   = cavl2_find_or_insert(
+        const uint16_t   sid = topic_subject_id(topic->hash, topic->evictions);
+        cy_tree_t* const t   = cavl2_find_or_insert(
           &cy->topics_by_subject_id, &sid, &cavl_comp_topic_subject_id, topic, &cavl_factory_topic_subject_id);
         assert(t != NULL); // we will create it if not found, meaning allocation succeeded
         if (t == &topic->index_subject_id) {
             break; // Done!
         }
         // Someone else is sitting on that subject-ID. We need to arbitrate.
-        struct cy_topic_t* const other = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
+        cy_topic_t* const other = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
         if (left_wins(topic, log2_floor(other->age), other->hash)) {
             // This is our slot now! The other topic has to move.
@@ -703,7 +700,7 @@ static void topic_allocate(struct cy_t* const       cy,
     call_depth--;
 }
 
-static void topic_age(struct cy_topic_t* const topic, const cy_us_t now)
+static void topic_age(cy_topic_t* const topic, const cy_us_t now)
 {
     const int32_t sec = (int32_t)((now - topic->ts_aged) / MEGA);
     assert(sec >= 0);
@@ -715,13 +712,13 @@ static void topic_age(struct cy_topic_t* const topic, const cy_us_t now)
 
 /// UB if the topic under this name already exists.
 /// out_topic may be new if the reference is not immediately needed (it can be found later via indexes).
-static cy_err_t topic_new(struct cy_t* const        cy,
-                          struct cy_topic_t** const out_topic,
-                          const struct wkv_str_t    resolved_name,
-                          const uint64_t            hash,
-                          const uint32_t            evictions)
+static cy_err_t topic_new(cy_t* const        cy,
+                          cy_topic_t** const out_topic,
+                          const wkv_str_t    resolved_name,
+                          const uint64_t     hash,
+                          const uint32_t     evictions)
 {
-    struct cy_topic_t* const topic = cy->platform->topic_new(cy);
+    cy_topic_t* const topic = cy->platform->topic_new(cy);
     if (topic == NULL) {
         return CY_ERR_MEMORY;
     }
@@ -766,7 +763,7 @@ static cy_err_t topic_new(struct cy_t* const        cy,
     topic->index_name->value = topic;
 
     // Insert the new topic into the name index tree. If it's not unique, bail out.
-    const struct cy_tree_t* const res_tree =
+    const cy_tree_t* const res_tree =
       cavl2_find_or_insert(&cy->topics_by_hash, &topic->hash, &cavl_comp_topic_hash, topic, &cavl2_trivial_factory);
     assert(res_tree == &topic->index_hash); // Cannot invoke this if such topic already exists!
 
@@ -806,11 +803,9 @@ bad_name: // TODO correct deinitialization
     return CY_ERR_NAME;
 }
 
-static cy_err_t topic_ensure(struct cy_t* const        cy,
-                             struct cy_topic_t** const out_topic,
-                             const struct wkv_str_t    resolved_name)
+static cy_err_t topic_ensure(cy_t* const cy, cy_topic_t** const out_topic, const wkv_str_t resolved_name)
 {
-    struct cy_topic_t* const topic = cy_topic_find_by_name(cy, resolved_name);
+    cy_topic_t* const topic = cy_topic_find_by_name(cy, resolved_name);
     if (topic != NULL) {
         if (out_topic != NULL) {
             *out_topic = topic;
@@ -824,11 +819,11 @@ static cy_err_t topic_ensure(struct cy_t* const        cy,
 /// Allocates new memory for the coupling, which may fail.
 /// Don't forget topic_ensure_subscribed() afterward if necessary.
 /// The substitutions must not lose validity until the topic is destroyed.
-static cy_err_t topic_couple(struct cy_t* const                 cy,
-                             struct cy_topic_t* const           topic,
+static cy_err_t topic_couple(cy_t* const                        cy,
+                             cy_topic_t* const                  topic,
                              struct cy_subscriber_root_t* const subr,
                              const size_t                       substitution_count,
-                             const struct wkv_substitution_t*   substitutions)
+                             const wkv_substitution_t*          substitutions)
 {
 #if CY_CONFIG_TRACE
     char subr_name[CY_TOPIC_NAME_MAX + 1];
@@ -854,10 +849,10 @@ static cy_err_t topic_couple(struct cy_t* const                 cy,
         // When we copy the substitutions, we assume that the lifetime of the substituted string segments is at least
         // the same as the lifetime of the topic, which is true because the substitutions point into the topic name
         // string, which is part of the topic object.
-        const struct wkv_substitution_t* s = substitutions;
+        const wkv_substitution_t* s = substitutions;
         for (size_t i = 0U; s != NULL; i++) {
             assert(i < cpl->substitution_count);
-            cpl->substitutions[i] = (struct cy_substitution_t){ .str = s->str, .ordinal = s->ordinal };
+            cpl->substitutions[i] = (cy_substitution_t){ .str = s->str, .ordinal = s->ordinal };
             s                     = s->next;
         }
         // If this is a verbatim subscriber, the topic is no (longer) mortal.
@@ -874,10 +869,10 @@ static cy_err_t topic_couple(struct cy_t* const                 cy,
 }
 
 /// Returns non-NULL on OOM.
-static void* wkv_cb_couple_new_topic(const struct wkv_event_t evt)
+static void* wkv_cb_couple_new_topic(const wkv_event_t evt)
 {
-    struct cy_t* const                 cy    = (struct cy_t*)(((void**)evt.context)[0]);
-    struct cy_topic_t* const           topic = (struct cy_topic_t*)(((void**)evt.context)[1]);
+    cy_t* const                        cy    = (struct cy_t*)(((void**)evt.context)[0]);
+    cy_topic_t* const                  topic = (struct cy_topic_t*)(((void**)evt.context)[1]);
     struct cy_subscriber_root_t* const subr  = (struct cy_subscriber_root_t*)evt.node->value;
     const cy_err_t                     res   = topic_couple(cy, topic, subr, evt.substitution_count, evt.substitutions);
     return (0 == res) ? NULL : "";
@@ -885,10 +880,10 @@ static void* wkv_cb_couple_new_topic(const struct wkv_event_t evt)
 
 /// If there is a pattern subscriber matching the name of this topic, attempt to create a new subscription.
 /// If a new subscription is created, the new topic will be returned.
-static struct cy_topic_t* topic_subscribe_if_matching(struct cy_t* const     cy,
-                                                      const struct wkv_str_t resolved_name,
-                                                      const uint64_t         hash,
-                                                      const uint32_t         evictions)
+static cy_topic_t* topic_subscribe_if_matching(cy_t* const     cy,
+                                               const wkv_str_t resolved_name,
+                                               const uint64_t  hash,
+                                               const uint32_t  evictions)
 {
     assert((cy != NULL) && (resolved_name.str != NULL));
     if (resolved_name.len == 0) {
@@ -899,7 +894,7 @@ static struct cy_topic_t* topic_subscribe_if_matching(struct cy_t* const     cy,
     }
     CY_TRACE(cy, "✨'%s'", resolved_name.str);
     // Create the new topic.
-    struct cy_topic_t* topic = NULL;
+    cy_topic_t* topic = NULL;
     {
         const cy_err_t res = topic_new(cy, &topic, resolved_name, hash, evictions);
         if (res != CY_OK) {
@@ -921,10 +916,10 @@ static struct cy_topic_t* topic_subscribe_if_matching(struct cy_t* const     cy,
     return topic;
 }
 
-static void* wkv_cb_topic_scout_response(const struct wkv_event_t evt)
+static void* wkv_cb_topic_scout_response(const wkv_event_t evt)
 {
-    struct cy_t* const       cy    = (struct cy_t*)evt.context;
-    struct cy_topic_t* const topic = (struct cy_topic_t*)evt.node->value;
+    cy_t* const       cy    = (struct cy_t*)evt.context;
+    cy_topic_t* const topic = (struct cy_topic_t*)evt.node->value;
     CY_TRACE(cy, "📢'%s' #%016llx @%04x", topic->name, (unsigned long long)(topic->hash), cy_topic_subject_id(topic));
     prioritize_gossip(cy, topic, 10);
     return NULL;
@@ -956,7 +951,7 @@ struct heartbeat_t
     char     topic_name[CY_TOPIC_NAME_MAX + 1];
 };
 
-static cy_err_t publish_heartbeat(struct cy_t* const cy, const cy_us_t now, struct heartbeat_t* const message)
+static cy_err_t publish_heartbeat(cy_t* const cy, const cy_us_t now, struct heartbeat_t* const message)
 {
     cy_err_t res = ensure_joined(cy);
     if (res != CY_OK) {
@@ -970,7 +965,7 @@ static cy_err_t publish_heartbeat(struct cy_t* const cy, const cy_us_t now, stru
     const size_t message_size = offsetof(struct heartbeat_t, topic_name) + message->topic_name_len;
     assert(message_size <= sizeof(struct heartbeat_t));
     assert(message->topic_name_len <= CY_TOPIC_NAME_MAX);
-    const struct cy_buffer_borrowed_t payload = { .next = NULL, .view = { .data = message, .size = message_size } };
+    const cy_buffer_borrowed_t payload = { .next = NULL, .view = { .data = message, .size = message_size } };
 
     // Publish the message.
     assert(cy->node_id <= cy->platform->node_id_max);
@@ -984,7 +979,7 @@ static cy_err_t publish_heartbeat(struct cy_t* const cy, const cy_us_t now, stru
     return res;
 }
 
-static cy_err_t publish_heartbeat_gossip(struct cy_t* const cy, struct cy_topic_t* const topic, const cy_us_t now)
+static cy_err_t publish_heartbeat_gossip(cy_t* const cy, cy_topic_t* const topic, const cy_us_t now)
 {
     topic_age(topic, now);
     topic_ensure_subscribed(cy, topic); // use this opportunity to repair the subscription if broken
@@ -1014,7 +1009,7 @@ static cy_err_t publish_heartbeat_gossip(struct cy_t* const cy, struct cy_topic_
     return publish_heartbeat(cy, now, &msg);
 }
 
-static cy_err_t publish_heartbeat_scout(struct cy_t* const cy, const cy_us_t now)
+static cy_err_t publish_heartbeat_scout(cy_t* const cy, const cy_us_t now)
 {
     const struct cy_subscriber_root_t* subr = cy->next_scout;
     assert(subr != NULL); // https://github.com/pavel-kirienko/cy/issues/12#issuecomment-2953184238
@@ -1031,7 +1026,7 @@ static cy_err_t publish_heartbeat_scout(struct cy_t* const cy, const cy_us_t now
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const evt)
+static void on_heartbeat(cy_t* const cy, const cy_arrival_t* const evt)
 {
     assert((evt->subscriber != NULL) && (evt->topic != NULL) && (evt->transfer != NULL));
     // Deserialize the message. TODO: deserialize properly.
@@ -1041,17 +1036,17 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
     if ((msg_size < offsetof(struct heartbeat_t, topic_name)) || (heartbeat.version != 1)) {
         return;
     }
-    const cy_us_t                        ts              = evt->transfer->timestamp;
-    const struct cy_transfer_metadata_t* meta            = &evt->transfer->metadata;
-    const uint64_t                       other_hash      = heartbeat.topic_hash;
-    const uint32_t                       other_evictions = heartbeat.topic_evictions;
-    const int_fast8_t                    other_lage      = heartbeat.topic_log_age;
-    const bool                           is_scout        = (heartbeat.flags & FLAG_SCOUT) != 0U;
-    const struct wkv_str_t               key = { .len = heartbeat.topic_name_len, .str = heartbeat.topic_name };
+    const cy_us_t                 ts              = evt->transfer->timestamp;
+    const cy_transfer_metadata_t* meta            = &evt->transfer->metadata;
+    const uint64_t                other_hash      = heartbeat.topic_hash;
+    const uint32_t                other_evictions = heartbeat.topic_evictions;
+    const int_fast8_t             other_lage      = heartbeat.topic_log_age;
+    const bool                    is_scout        = (heartbeat.flags & FLAG_SCOUT) != 0U;
+    const wkv_str_t               key             = { .len = heartbeat.topic_name_len, .str = heartbeat.topic_name };
     //
     if (!is_scout) {
         // Find the topic in our local database.
-        struct cy_topic_t* mine = cy_topic_find_by_hash(cy, other_hash);
+        cy_topic_t* mine = cy_topic_find_by_hash(cy, other_hash);
         if ((heartbeat.flags & (FLAG_PUBLISHING | FLAG_RECEIVING)) != 0) {
             if (mine == NULL) {
                 mine = topic_subscribe_if_matching(cy, key, other_hash, other_evictions);
@@ -1158,9 +1153,9 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
 //                                                      PUBLISHER
 // =====================================================================================================================
 
-static void retire_timed_out_futures(struct cy_t* cy, const cy_us_t now)
+static void retire_timed_out_futures(cy_t* cy, const cy_us_t now)
 {
-    struct cy_future_t* fut = (struct cy_future_t*)cavl2_min(cy->futures_by_deadline);
+    cy_future_t* fut = (struct cy_future_t*)cavl2_min(cy->futures_by_deadline);
     while ((fut != NULL) && (fut->deadline < now)) {
         assert(fut->state == cy_future_pending);
         cavl2_remove(&cy->futures_by_deadline, &fut->index_deadline);
@@ -1173,21 +1168,18 @@ static void retire_timed_out_futures(struct cy_t* cy, const cy_us_t now)
         // cavl2_next_greater(), which is very efficient, but the problem here is that the user callback may modify
         // the tree unpredictably, and we don't want to put constraints on the callback behavior.
         // A more sophisticated solution is to mark the tree as modified, but it's not worth the effort.
-        fut = (struct cy_future_t*)cavl2_min(cy->futures_by_deadline);
+        fut = (cy_future_t*)cavl2_min(cy->futures_by_deadline);
     }
 }
 
-cy_err_t cy_advertise(struct cy_t* const           cy,
-                      struct cy_publisher_t* const pub,
-                      const struct wkv_str_t       name,
-                      const size_t                 response_extent)
+cy_err_t cy_advertise(cy_t* const cy, cy_publisher_t* const pub, const wkv_str_t name, const size_t response_extent)
 {
     assert((pub != NULL) && (cy != NULL));
     char name_buf[CY_TOPIC_NAME_MAX + 1U];
     if (!resolve_name(cy->namespace_, cy->name, name.str, name_buf)) {
         return CY_ERR_NAME;
     }
-    const struct wkv_str_t resolved_name = wkv_key(name_buf);
+    const wkv_str_t resolved_name = wkv_key(name_buf);
     memset(pub, 0, sizeof(*pub));
     const cy_err_t res = topic_ensure(cy, &pub->topic, resolved_name);
     pub->priority      = cy_prio_nominal;
@@ -1218,13 +1210,13 @@ cy_err_t cy_advertise(struct cy_t* const           cy,
     return res;
 }
 
-void cy_unadvertise(struct cy_t* const cy, struct cy_publisher_t* pub)
+void cy_unadvertise(cy_t* const cy, cy_publisher_t* pub)
 {
     (void)cy;
     (void)pub;
 }
 
-void cy_future_new(struct cy_future_t* const future, const cy_future_callback_t callback, void* const user)
+void cy_future_new(cy_future_t* const future, const cy_future_callback_t callback, void* const user)
 {
     assert(future != NULL);
     memset(future, 0, sizeof(*future));
@@ -1233,15 +1225,15 @@ void cy_future_new(struct cy_future_t* const future, const cy_future_callback_t 
     future->user     = user;
 }
 
-cy_err_t cy_publish(struct cy_t* const                cy,
-                    struct cy_publisher_t* const      pub,
-                    const cy_us_t                     tx_deadline,
-                    const struct cy_buffer_borrowed_t payload,
-                    const cy_us_t                     response_deadline,
-                    struct cy_future_t* const         future)
+cy_err_t cy_publish(cy_t* const                cy,
+                    cy_publisher_t* const      pub,
+                    const cy_us_t              tx_deadline,
+                    const cy_buffer_borrowed_t payload,
+                    const cy_us_t              response_deadline,
+                    cy_future_t* const         future)
 {
     assert(pub != NULL);
-    struct cy_topic_t* const topic = pub->topic;
+    cy_topic_t* const topic = pub->topic;
     assert(topic != NULL);
     assert(topic->pub_count > 0);
 
@@ -1256,19 +1248,19 @@ cy_err_t cy_publish(struct cy_t* const                cy,
     // The reason we can't do it afterward is that if the transport has a cyclic transfer-ID, insertion may fail if
     // we have exhausted the transfer-ID set.
     if (future != NULL) {
-        future->index_deadline     = (struct cy_tree_t){ 0 };
-        future->index_transfer_id  = (struct cy_tree_t){ 0 };
+        future->index_deadline     = (cy_tree_t){ 0 };
+        future->index_transfer_id  = (cy_tree_t){ 0 };
         future->publisher          = pub;
         future->state              = cy_future_pending;
         future->transfer_id_masked = topic->pub_transfer_id & cy->platform->transfer_id_mask;
         future->deadline           = response_deadline;
-        future->last_response      = (struct cy_transfer_owned_t){ 0 };
+        future->last_response      = (cy_transfer_owned_t){ 0 };
         // NB: we don't touch the callback and the user pointer, as they are to be initialized by the user.
-        const struct cy_tree_t* const tr = cavl2_find_or_insert(&topic->futures_by_transfer_id,
-                                                                &future->transfer_id_masked,
-                                                                &cavl_comp_future_transfer_id_masked,
-                                                                future,
-                                                                &cavl_factory_future_transfer_id);
+        const cy_tree_t* const tr = cavl2_find_or_insert(&topic->futures_by_transfer_id,
+                                                         &future->transfer_id_masked,
+                                                         &cavl_comp_future_transfer_id_masked,
+                                                         future,
+                                                         &cavl_factory_future_transfer_id);
         if (tr != &future->index_transfer_id) {
             return CY_ERR_CAPACITY;
         }
@@ -1278,11 +1270,11 @@ cy_err_t cy_publish(struct cy_t* const                cy,
 
     if (future != NULL) {
         if (res == CY_OK) {
-            const struct cy_tree_t* const tr = cavl2_find_or_insert(&cy->futures_by_deadline,
-                                                                    &response_deadline,
-                                                                    &cavl_comp_future_deadline,
-                                                                    future,
-                                                                    &cavl_factory_future_deadline);
+            const cy_tree_t* const tr = cavl2_find_or_insert(&cy->futures_by_deadline,
+                                                             &response_deadline,
+                                                             &cavl_comp_future_deadline,
+                                                             future,
+                                                             &cavl_factory_future_deadline);
             assert(tr == &future->index_deadline);
         } else {
             cavl2_remove(&topic->futures_by_transfer_id, &future->index_transfer_id);
@@ -1298,16 +1290,16 @@ cy_err_t cy_publish(struct cy_t* const                cy,
 // =====================================================================================================================
 
 /// Returns non-NULL on OOM, which aborts the traversal early.
-void* wkv_cb_couple_new_subscription(const struct wkv_event_t evt)
+void* wkv_cb_couple_new_subscription(const wkv_event_t evt)
 {
-    struct cy_t* const                  cy    = (struct cy_t*)(((void**)evt.context)[0]);
-    const struct cy_subscriber_t* const sub   = (struct cy_subscriber_t*)(((void**)evt.context)[1]);
-    struct cy_topic_t* const            topic = (struct cy_topic_t*)evt.node->value;
+    cy_t* const                  cy    = (struct cy_t*)(((void**)evt.context)[0]);
+    const cy_subscriber_t* const sub   = (struct cy_subscriber_t*)(((void**)evt.context)[1]);
+    cy_topic_t* const            topic = (struct cy_topic_t*)evt.node->value;
     // If the new subscription parameters are different, we will need to resubscribe this topic.
     bool resubscribe = false;
     if (topic->subscribed) {
-        const struct cy_subscription_params_t param_old = deduce_subscription_params(topic);
-        const struct cy_subscription_params_t param_new = sub->params;
+        const cy_subscription_params_t param_old = deduce_subscription_params(topic);
+        const cy_subscription_params_t param_new = sub->params;
         resubscribe = (param_new.extent > param_old.extent) || //-------------------------------------
                       (param_new.transfer_id_timeout > param_old.transfer_id_timeout);
     }
@@ -1325,14 +1317,14 @@ void* wkv_cb_couple_new_subscription(const struct wkv_event_t evt)
 }
 
 /// Either finds an existing subscriber root or creates a new one. NULL if OOM.
-static cy_err_t ensure_subscriber_root(struct cy_t* const                  cy,
-                                       const struct wkv_str_t              resolved_name,
+static cy_err_t ensure_subscriber_root(cy_t* const                         cy,
+                                       const wkv_str_t                     resolved_name,
                                        struct cy_subscriber_root_t** const out_root)
 {
     assert((cy != NULL) && (resolved_name.str != NULL) && (resolved_name.len > 0U) && (out_root != NULL));
 
     // Find or allocate a tree node.
-    struct wkv_node_t* const node = wkv_set(&cy->subscribers_by_name, resolved_name);
+    wkv_node_t* const node = wkv_set(&cy->subscribers_by_name, resolved_name);
     if (node == NULL) {
         return CY_ERR_MEMORY;
     }
@@ -1393,11 +1385,11 @@ static cy_err_t ensure_subscriber_root(struct cy_t* const                  cy,
     return CY_OK;
 }
 
-cy_err_t cy_subscribe_with_params(struct cy_t* const                    cy,
-                                  struct cy_subscriber_t* const         sub,
-                                  const struct wkv_str_t                name,
-                                  const struct cy_subscription_params_t params,
-                                  const cy_subscriber_callback_t        callback)
+cy_err_t cy_subscribe_with_params(cy_t* const                    cy,
+                                  cy_subscriber_t* const         sub,
+                                  const wkv_str_t                name,
+                                  const cy_subscription_params_t params,
+                                  const cy_subscriber_callback_t callback)
 {
     if ((sub == NULL) || (cy == NULL) || (params.transfer_id_timeout < 0) || (callback == NULL)) {
         return CY_ERR_ARGUMENT;
@@ -1406,7 +1398,7 @@ cy_err_t cy_subscribe_with_params(struct cy_t* const                    cy,
     if (!resolve_name(cy->namespace_, cy->name, name.str, name_buf)) {
         return CY_ERR_NAME;
     }
-    const struct wkv_str_t resolved_name = wkv_key(name_buf);
+    const wkv_str_t resolved_name = wkv_key(name_buf);
     (void)memset(sub, 0, sizeof(*sub));
     CY_TRACE(cy,
              "✨'%s' extent=%zu tid_timeout=%lld",
@@ -1429,17 +1421,17 @@ cy_err_t cy_subscribe_with_params(struct cy_t* const                    cy,
     return CY_OK;
 }
 
-void cy_unsubscribe(struct cy_t* const cy, struct cy_subscriber_t* const sub)
+void cy_unsubscribe(cy_t* const cy, cy_subscriber_t* const sub)
 {
     (void)cy;
     (void)sub;
 }
 
-cy_err_t cy_respond(struct cy_t* const                  cy,
-                    struct cy_topic_t* const            topic,
-                    const cy_us_t                       tx_deadline,
-                    const struct cy_transfer_metadata_t metadata,
-                    const struct cy_buffer_borrowed_t   payload)
+cy_err_t cy_respond(cy_t* const                  cy,
+                    cy_topic_t* const            topic,
+                    const cy_us_t                tx_deadline,
+                    const cy_transfer_metadata_t metadata,
+                    const cy_buffer_borrowed_t   payload)
 {
     assert(topic != NULL);
     const cy_err_t res = ensure_joined(cy);
@@ -1452,13 +1444,13 @@ cy_err_t cy_respond(struct cy_t* const                  cy,
                              CY_P2P_SERVICE_ID_TOPIC_RESPONSE,
                              metadata,
                              tx_deadline,
-                             (struct cy_buffer_borrowed_t){
+                             (cy_buffer_borrowed_t){
                                .next = &payload,
                                .view = { .size = RESPONSE_PAYLOAD_OVERHEAD_BYTES, .data = &topic->hash },
                              });
 }
 
-void cy_subscriber_name(const struct cy_t* const cy, const struct cy_subscriber_t* const sub, char* const out_name)
+void cy_subscriber_name(const cy_t* const cy, const cy_subscriber_t* const sub, char* const out_name)
 {
     wkv_get_key(&cy->subscribers_by_name, sub->root->index_name, out_name);
 }
@@ -1467,22 +1459,22 @@ void cy_subscriber_name(const struct cy_t* const cy, const struct cy_subscriber_
 //                                                  NODE & TOPIC
 // =====================================================================================================================
 
-cy_us_t cy_now(const struct cy_t* const cy)
+cy_us_t cy_now(const cy_t* const cy)
 {
     return cy->platform->now(cy);
 }
 
-bool cy_joined(const struct cy_t* const cy)
+bool cy_joined(const cy_t* const cy)
 {
     return cy->node_id <= cy->platform->node_id_max;
 }
 
-bool cy_ready(const struct cy_t* const cy)
+bool cy_ready(const cy_t* const cy)
 {
     return cy_joined(cy) && ((cy_now(cy) - cy->ts_event) > (1 * MEGA));
 }
 
-void cy_topic_hint(struct cy_t* const cy, struct cy_topic_t* const topic, const uint16_t subject_id)
+void cy_topic_hint(cy_t* const cy, cy_topic_t* const topic, const uint16_t subject_id)
 {
     if ((topic != NULL) && (subject_id < CY_TOTAL_SUBJECT_COUNT) && (!is_pinned(topic->hash)) &&
         (topic->evictions == 0)) {
@@ -1502,18 +1494,18 @@ void cy_topic_hint(struct cy_t* const cy, struct cy_topic_t* const topic, const 
     }
 }
 
-struct cy_topic_t* cy_topic_find_by_name(const struct cy_t* const cy, const struct wkv_str_t name)
+cy_topic_t* cy_topic_find_by_name(const cy_t* const cy, const wkv_str_t name)
 {
-    const struct wkv_node_t* const node  = wkv_get(&cy->topics_by_name, name);
-    struct cy_topic_t* const       topic = (node != NULL) ? (struct cy_topic_t*)node->value : NULL;
+    const wkv_node_t* const node  = wkv_get(&cy->topics_by_name, name);
+    cy_topic_t* const       topic = (node != NULL) ? (struct cy_topic_t*)node->value : NULL;
     assert(topic == cy_topic_find_by_hash(cy, topic_hash(name)));
     return topic;
 }
 
-struct cy_topic_t* cy_topic_find_by_hash(const struct cy_t* const cy, const uint64_t hash)
+cy_topic_t* cy_topic_find_by_hash(const cy_t* const cy, const uint64_t hash)
 {
     assert(cy != NULL);
-    struct cy_topic_t* const topic = (struct cy_topic_t*)cavl2_find(cy->topics_by_hash, &hash, &cavl_comp_topic_hash);
+    cy_topic_t* const topic = (struct cy_topic_t*)cavl2_find(cy->topics_by_hash, &hash, &cavl_comp_topic_hash);
     if (topic == NULL) {
         return NULL;
     }
@@ -1521,41 +1513,41 @@ struct cy_topic_t* cy_topic_find_by_hash(const struct cy_t* const cy, const uint
     return topic;
 }
 
-struct cy_topic_t* cy_topic_find_by_subject_id(const struct cy_t* const cy, const uint16_t subject_id)
+cy_topic_t* cy_topic_find_by_subject_id(const cy_t* const cy, const uint16_t subject_id)
 {
     assert(cy != NULL);
-    struct cy_tree_t* const t = cavl2_find(cy->topics_by_subject_id, &subject_id, &cavl_comp_topic_subject_id);
+    cy_tree_t* const t = cavl2_find(cy->topics_by_subject_id, &subject_id, &cavl_comp_topic_subject_id);
     if (t == NULL) {
         return NULL;
     }
-    struct cy_topic_t* topic = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
+    cy_topic_t* topic = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
     assert(cy_topic_subject_id(topic) == subject_id);
     return topic;
 }
 
-struct cy_topic_t* cy_topic_iter_first(const struct cy_t* const cy)
+cy_topic_t* cy_topic_iter_first(const cy_t* const cy)
 {
-    return (struct cy_topic_t*)cavl2_min(cy->topics_by_hash);
+    return (cy_topic_t*)cavl2_min(cy->topics_by_hash);
 }
 
-struct cy_topic_t* cy_topic_iter_next(struct cy_topic_t* const topic)
+cy_topic_t* cy_topic_iter_next(cy_topic_t* const topic)
 {
-    return (struct cy_topic_t*)cavl2_next_greater(&topic->index_hash);
+    return (cy_topic_t*)cavl2_next_greater(&topic->index_hash);
 }
 
-uint16_t cy_topic_subject_id(const struct cy_topic_t* const topic)
+uint16_t cy_topic_subject_id(const cy_topic_t* const topic)
 {
     return topic_subject_id(topic->hash, topic->evictions);
 }
 
-struct wkv_str_t cy_topic_name(const struct cy_topic_t* const topic)
+wkv_str_t cy_topic_name(const cy_topic_t* const topic)
 {
-    return (struct wkv_str_t){ .len = topic->index_name->key_len, .str = topic->name };
+    return (wkv_str_t){ .len = topic->index_name->key_len, .str = topic->name };
 }
 
-bool cy_has_substitution_tokens(const struct wkv_str_t name)
+bool cy_has_substitution_tokens(const wkv_str_t name)
 {
-    struct wkv_t kv;
+    wkv_t kv;
     wkv_init(&kv, &wkv_realloc);
     return wkv_has_substitution_tokens(&kv, name);
 }
@@ -1564,7 +1556,7 @@ bool cy_has_substitution_tokens(const struct wkv_str_t name)
 //                                                      BUFFERS
 // =====================================================================================================================
 
-void cy_buffer_owned_release(struct cy_t* const cy, struct cy_buffer_owned_t* const payload)
+void cy_buffer_owned_release(cy_t* const cy, cy_buffer_owned_t* const payload)
 {
     if ((cy != NULL) && (payload != NULL) && (payload->origin.data != NULL)) {
         cy->platform->buffer_release(cy, *payload);
@@ -1575,10 +1567,10 @@ void cy_buffer_owned_release(struct cy_t* const cy, struct cy_buffer_owned_t* co
     }
 }
 
-size_t cy_buffer_borrowed_size(const struct cy_buffer_borrowed_t payload)
+size_t cy_buffer_borrowed_size(const cy_buffer_borrowed_t payload)
 {
-    size_t                             out = 0;
-    const struct cy_buffer_borrowed_t* p   = &payload;
+    size_t                      out = 0;
+    const cy_buffer_borrowed_t* p   = &payload;
     while (p != NULL) {
         out += p->view.size;
         p = p->next;
@@ -1586,11 +1578,11 @@ size_t cy_buffer_borrowed_size(const struct cy_buffer_borrowed_t payload)
     return out;
 }
 
-size_t cy_buffer_borrowed_gather(const struct cy_buffer_borrowed_t payload, const struct cy_bytes_mut_t dest)
+size_t cy_buffer_borrowed_gather(const cy_buffer_borrowed_t payload, const cy_bytes_mut_t dest)
 {
     size_t offset = 0;
     if (NULL != dest.data) {
-        const struct cy_buffer_borrowed_t* frag = &payload;
+        const cy_buffer_borrowed_t* frag = &payload;
         while ((frag != NULL) && (offset < dest.size)) {
             assert(frag->view.data != NULL);
             const size_t frag_size = smaller(frag->view.size, dest.size - offset);
@@ -1607,11 +1599,11 @@ size_t cy_buffer_borrowed_gather(const struct cy_buffer_borrowed_t payload, cons
 //                                              PLATFORM LAYER INTERFACE
 // =====================================================================================================================
 
-cy_err_t cy_new(struct cy_t* const                cy,
-                const struct cy_platform_t* const platform,
-                const uint64_t                    uid,
-                const uint16_t                    node_id,
-                const struct wkv_str_t            namespace_)
+cy_err_t cy_new(cy_t* const                cy,
+                const cy_platform_t* const platform,
+                const uint64_t             uid,
+                const uint16_t             node_id,
+                const wkv_str_t            namespace_)
 {
     assert(cy != NULL);
     assert(uid != 0);
@@ -1680,7 +1672,7 @@ cy_err_t cy_new(struct cy_t* const                cy,
     cy->mortal_head          = NULL;
     cy->mortal_tail          = NULL;
 
-    struct cy_bloom64_t* const node_id_bloom = platform->node_id_bloom(cy);
+    cy_bloom64_t* const node_id_bloom = platform->node_id_bloom(cy);
     assert(node_id_bloom != NULL);
     assert(node_id_bloom->n_bits > 0);
     assert((node_id_bloom->n_bits % 64) == 0);
@@ -1723,9 +1715,9 @@ cy_err_t cy_new(struct cy_t* const                cy,
 /// If we don't have a node-ID and this is a new Bloom entry, follow CSMA/CD: add random wait.
 /// The point is to reduce the chances of multiple nodes appearing simultaneously and claiming same node-IDs.
 /// We keep tracking neighbors even if we have a node-ID in case we encounter a collision later and need to move.
-static void mark_neighbor(struct cy_t* const cy, const uint16_t remote_node_id)
+static void mark_neighbor(cy_t* const cy, const uint16_t remote_node_id)
 {
-    struct cy_bloom64_t* const bloom = cy->platform->node_id_bloom(cy);
+    cy_bloom64_t* const bloom = cy->platform->node_id_bloom(cy);
     assert((bloom != NULL) && (bloom->n_bits > 0) && ((bloom->n_bits % 64) == 0) && (bloom->popcount <= bloom->n_bits));
     // A large population count indicates that the filter contains tombstones (marks for nodes that have left the
     // network). We can't remove them individually, so we purge the filter and start over.
@@ -1742,9 +1734,7 @@ static void mark_neighbor(struct cy_t* const cy, const uint16_t remote_node_id)
     bloom64_set(bloom, remote_node_id);
 }
 
-void cy_ingest_topic_transfer(struct cy_t* const         cy,
-                              struct cy_topic_t* const   topic,
-                              struct cy_transfer_owned_t transfer)
+void cy_ingest_topic_transfer(cy_t* const cy, cy_topic_t* const topic, cy_transfer_owned_t transfer)
 {
     assert(topic != NULL);
 
@@ -1762,16 +1752,16 @@ void cy_ingest_topic_transfer(struct cy_t* const         cy,
     // The callback may unsubscribe, so we have to store the next pointer early.
     const struct cy_topic_coupling_t* cpl = topic->couplings;
     while (cpl != NULL) {
-        struct cy_subscriber_t* sub = cpl->root->head;
+        cy_subscriber_t* sub = cpl->root->head;
         assert(sub != NULL);
         const struct cy_topic_coupling_t* const next_cpl = cpl->next;
-        struct cy_subscriber_t* const           next_sub = sub->next;
+        cy_subscriber_t* const                  next_sub = sub->next;
         while (sub != NULL) {
-            const struct cy_arrival_t evt = { .subscriber         = sub,
-                                              .topic              = topic,
-                                              .transfer           = &transfer,
-                                              .substitution_count = cpl->substitution_count,
-                                              .substitutions      = cpl->substitutions };
+            const cy_arrival_t evt = { .subscriber         = sub,
+                                       .topic              = topic,
+                                       .transfer           = &transfer,
+                                       .substitution_count = cpl->substitution_count,
+                                       .substitutions      = cpl->substitutions };
             sub->callback(cy, &evt);
             sub = next_sub;
         }
@@ -1784,7 +1774,7 @@ void cy_ingest_topic_transfer(struct cy_t* const         cy,
     }
 }
 
-void cy_ingest_topic_response_transfer(struct cy_t* const cy, struct cy_transfer_owned_t transfer)
+void cy_ingest_topic_response_transfer(cy_t* const cy, cy_transfer_owned_t transfer)
 {
     assert(cy != NULL);
     mark_neighbor(cy, transfer.metadata.remote_node_id);
@@ -1802,21 +1792,21 @@ void cy_ingest_topic_response_transfer(struct cy_t* const cy, struct cy_transfer
     transfer.payload.base.view.data = ((const char*)transfer.payload.base.view.data) + sizeof(topic_hash);
 
     // Find the topic -- log(N) lookup.
-    struct cy_topic_t* const topic = cy_topic_find_by_hash(cy, topic_hash);
+    cy_topic_t* const topic = cy_topic_find_by_hash(cy, topic_hash);
     if (topic == NULL) {
         cy->platform->buffer_release(cy, transfer.payload);
         return; // We don't know this topic, ignore it.
     }
 
     // Find the matching pending response future -- log(N) lookup.
-    const uint64_t          transfer_id_masked = transfer.metadata.transfer_id & cy->platform->transfer_id_mask;
-    struct cy_tree_t* const tr =
+    const uint64_t   transfer_id_masked = transfer.metadata.transfer_id & cy->platform->transfer_id_mask;
+    cy_tree_t* const tr =
       cavl2_find(topic->futures_by_transfer_id, &transfer_id_masked, &cavl_comp_future_transfer_id_masked);
     if (tr == NULL) {
         cy->platform->buffer_release(cy, transfer.payload);
         return; // Unexpected or duplicate response. TODO: Linger completed futures for multiple responses?
     }
-    struct cy_future_t* const fut = CAVL2_TO_OWNER(tr, struct cy_future_t, index_transfer_id);
+    cy_future_t* const fut = CAVL2_TO_OWNER(tr, struct cy_future_t, index_transfer_id);
     assert(fut->state == cy_future_pending); // TODO Linger completed futures for multiple responses?
 
     // Finalize and retire the future.
@@ -1830,7 +1820,7 @@ void cy_ingest_topic_response_transfer(struct cy_t* const cy, struct cy_transfer
     }
 }
 
-cy_err_t cy_update(struct cy_t* const cy)
+cy_err_t cy_update(cy_t* const cy)
 {
     cy_err_t      res = CY_OK;
     const cy_us_t now = cy_now(cy);
@@ -1849,7 +1839,7 @@ cy_err_t cy_update(struct cy_t* const cy)
 
     // Find the next topic to gossip. We always have at least the heartbeat topic, so the index is never empty.
     // It is a bit wasteful to fetch the min node every update; consider switching from AVL to perhaps a heap?
-    struct cy_topic_t* const topic_next_gossip =
+    cy_topic_t* const topic_next_gossip =
       CAVL2_TO_OWNER(cavl2_min(cy->topics_by_gossip_time), struct cy_topic_t, index_gossip_order);
 
     // Decide if it is time to publish a heartbeat.
@@ -1867,14 +1857,14 @@ cy_err_t cy_update(struct cy_t* const cy)
     return res;
 }
 
-void cy_notify_topic_hash_collision(struct cy_t* const cy, struct cy_topic_t* const topic)
+void cy_notify_topic_hash_collision(cy_t* const cy, cy_topic_t* const topic)
 {
     if (topic != NULL) { // Topics with the same time will be ordered FIFO -- the tree is stable.
         prioritize_gossip(cy, topic, 100);
     }
 }
 
-void cy_notify_node_id_collision(struct cy_t* const cy)
+void cy_notify_node_id_collision(cy_t* const cy)
 {
     assert(cy != NULL);
     if ((!cy->node_id_collision) && (cy->node_id <= cy->platform->node_id_max)) {

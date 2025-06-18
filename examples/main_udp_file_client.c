@@ -54,16 +54,16 @@ int main(const int argc, char* argv[])
     memcpy(req.path, argv[2], req.path_len);
 
     // SET UP THE NODE. This is the only platform-specific part; the rest is platform- and transport-agnostic.
-    struct cy_udp_posix_t cy_udp;
-    cy_err_t              res = cy_udp_posix_new_c(
+    cy_udp_posix_t cy_udp;
+    cy_err_t       res = cy_udp_posix_new_c(
       &cy_udp, random_uid(), argv[1], (uint32_t[3]){ udp_wrapper_parse_iface_address("127.0.0.1") }, 1000);
     if (res != CY_OK) {
         errx(res, "cy_udp_posix_new");
     }
-    struct cy_t* const cy = &cy_udp.base;
+    cy_t* const cy = &cy_udp.base;
 
     // SET UP THE FILE READ PUBLISHER.
-    struct cy_publisher_t pub_file_read;
+    cy_publisher_t pub_file_read;
     res = cy_advertise_c(cy, &pub_file_read, "file/read", 1024);
     if (res != CY_OK) {
         errx(res, "cy_advertise_c");
@@ -85,13 +85,13 @@ int main(const int argc, char* argv[])
         const cy_us_t now = cy_udp_posix_now();
 
         // Send the request.
-        struct cy_future_t future;
+        cy_future_t future;
         cy_future_new(&future, NULL, NULL);
         fprintf(stderr, "\nRequesting offset %llu...\n", (unsigned long long)req.read_offset);
         res = cy_publish(cy,
                          &pub_file_read,
                          now + MEGA,
-                         (struct cy_buffer_borrowed_t){ .view = { .size = req.path_len + 10, .data = &req } },
+                         (cy_buffer_borrowed_t){ .view = { .size = req.path_len + 10, .data = &req } },
                          now + RESPONSE_TIMEOUT,
                          &future);
         if (res != CY_OK) {

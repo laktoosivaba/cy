@@ -73,16 +73,15 @@ extern "C"
 ///
 /// Ideally, this should not be necessary at all, as all efficient APIs need to support scattered buffers;
 /// but the reality is that many APIs still expect contiguous buffers, which requires an extra copy.
-#define CY_BUFFER_GATHER_ON_STACK(to_bytes, from_buffer_borrowed_head)                                        \
-    struct cy_bytes_t to_bytes = { .data = from_buffer_borrowed_head.view.data,                               \
-                                   .size = from_buffer_borrowed_head.view.size };                             \
-    unsigned char     CY_PASTE(to_bytes, _storage)[cy_buffer_borrowed_size(from_buffer_borrowed_head)];       \
-    if (from_buffer_borrowed_head.next != NULL) {                                                             \
-        to_bytes.size =                                                                                       \
-          cy_buffer_borrowed_gather(from_buffer_borrowed_head,                                                \
-                                    (struct cy_bytes_mut_t){ .data = CY_PASTE(to_bytes, _storage),            \
-                                                             .size = sizeof(CY_PASTE(to_bytes, _storage)) }); \
-        to_bytes.data = CY_PASTE(to_bytes, _storage);                                                         \
+#define CY_BUFFER_GATHER_ON_STACK(to_bytes, from_buffer_borrowed_head)                                             \
+    cy_bytes_t    to_bytes = { .data = from_buffer_borrowed_head.view.data,                                        \
+                               .size = from_buffer_borrowed_head.view.size };                                      \
+    unsigned char CY_PASTE(to_bytes, _storage)[cy_buffer_borrowed_size(from_buffer_borrowed_head)];                \
+    if (from_buffer_borrowed_head.next != NULL) {                                                                  \
+        to_bytes.size = cy_buffer_borrowed_gather(                                                                 \
+          from_buffer_borrowed_head,                                                                               \
+          (cy_bytes_mut_t){ .data = CY_PASTE(to_bytes, _storage), .size = sizeof(CY_PASTE(to_bytes, _storage)) }); \
+        to_bytes.data = CY_PASTE(to_bytes, _storage);                                                              \
     }
 
 #define CY_OK 0
@@ -96,12 +95,26 @@ extern "C"
 typedef uint_fast8_t cy_err_t;
 typedef int64_t      cy_us_t; ///< Monotonic microsecond timestamp. Signed to permit arithmetics in the past.
 
-struct cy_t;
-struct cy_topic_t;
-struct cy_future_t;
-struct cy_subscriber_t;
+#ifndef __cplusplus
+typedef struct cy_t                     cy_t;
+typedef struct cy_topic_t               cy_topic_t;
+typedef struct cy_bytes_t               cy_bytes_t;
+typedef struct cy_bytes_mut_t           cy_bytes_mut_t;
+typedef struct cy_buffer_borrowed_t     cy_buffer_borrowed_t;
+typedef struct cy_buffer_owned_t        cy_buffer_owned_t;
+typedef struct cy_tree_t                cy_tree_t;
+typedef struct cy_bloom64_t             cy_bloom64_t;
+typedef struct cy_transfer_metadata_t   cy_transfer_metadata_t;
+typedef struct cy_transfer_owned_t      cy_transfer_owned_t;
+typedef struct cy_publisher_t           cy_publisher_t;
+typedef struct cy_future_t              cy_future_t;
+typedef struct cy_substitution_t        cy_substitution_t;
+typedef struct cy_arrival_t             cy_arrival_t;
+typedef struct cy_subscription_params_t cy_subscription_params_t;
+typedef struct cy_subscriber_t          cy_subscriber_t;
+#endif
 
-enum cy_prio_t
+typedef enum cy_prio_t
 {
     cy_prio_exceptional = 0,
     cy_prio_immediate   = 1,
@@ -111,7 +124,7 @@ enum cy_prio_t
     cy_prio_low         = 5,
     cy_prio_slow        = 6,
     cy_prio_optional    = 7,
-};
+} cy_prio_t;
 
 struct cy_bytes_t
 {
@@ -143,20 +156,20 @@ struct cy_bytes_mut_t
 /// The size of a payload fragment may be zero.
 struct cy_buffer_borrowed_t
 {
-    const struct cy_buffer_borrowed_t* next; ///< NULL in the last entry.
-    struct cy_bytes_t                  view;
+    const cy_buffer_borrowed_t* next; ///< NULL in the last entry.
+    cy_bytes_t                  view;
 };
 struct cy_buffer_owned_t
 {
-    struct cy_buffer_borrowed_t base;
-    struct cy_bytes_mut_t       origin; ///< Do not access! Address may not be mapped. Only for freeing the payload.
+    cy_buffer_borrowed_t base;
+    cy_bytes_mut_t       origin; ///< Do not access! Address may not be mapped. Only for freeing the payload.
 };
 
 struct cy_tree_t
 {
-    struct cy_tree_t* up;
-    struct cy_tree_t* lr[2];
-    int_fast8_t       bf;
+    cy_tree_t*  up;
+    cy_tree_t*  lr[2];
+    int_fast8_t bf;
 };
 
 /// An ordinary Bloom filter with 64-bit words.
@@ -169,9 +182,9 @@ struct cy_bloom64_t
 
 struct cy_transfer_metadata_t
 {
-    enum cy_prio_t priority;
-    uint16_t       remote_node_id;
-    uint64_t       transfer_id;
+    cy_prio_t priority;
+    uint16_t  remote_node_id;
+    uint64_t  transfer_id;
 };
 
 /// A transfer object owns its payload.
@@ -179,9 +192,9 @@ struct cy_transfer_metadata_t
 /// otherwise, Cy will clean it up afterward.
 struct cy_transfer_owned_t
 {
-    cy_us_t                       timestamp;
-    struct cy_transfer_metadata_t metadata;
-    struct cy_buffer_owned_t      payload;
+    cy_us_t                timestamp;
+    cy_transfer_metadata_t metadata;
+    cy_buffer_owned_t      payload;
 };
 
 // =====================================================================================================================
@@ -190,9 +203,9 @@ struct cy_transfer_owned_t
 
 struct cy_publisher_t
 {
-    struct cy_topic_t* topic;    ///< Many-to-one relationship, never NULL; the topic is reference counted.
-    enum cy_prio_t     priority; ///< Defaults to cy_prio_nominal; can be overridden by the user at any time.
-    void*              user;
+    cy_topic_t* topic;    ///< Many-to-one relationship, never NULL; the topic is reference counted.
+    cy_prio_t   priority; ///< Defaults to cy_prio_nominal; can be overridden by the user at any time.
+    void*       user;
 };
 
 /// Future lifecycle:
@@ -200,15 +213,15 @@ struct cy_publisher_t
 ///     fresh ---> pending --+---> success
 ///                          |
 ///                          +---> response_timeout
-enum cy_future_state_t
+typedef enum cy_future_state_t
 {
     cy_future_fresh,
     cy_future_pending,
     cy_future_success,
     cy_future_response_timeout,
-};
+} cy_future_state_t;
 
-typedef void (*cy_future_callback_t)(struct cy_t*, struct cy_future_t*);
+typedef void (*cy_future_callback_t)(cy_t*, cy_future_t*);
 
 /// Register an expectation for a response to a message sent to the topic.
 /// The future shall not be moved or altered in any way except for the user and callback fields until its state is
@@ -216,19 +229,19 @@ typedef void (*cy_future_callback_t)(struct cy_t*, struct cy_future_t*);
 /// The future will enter the failure state to indicate that the response was not received before the deadline.
 struct cy_future_t
 {
-    struct cy_tree_t index_deadline;
-    struct cy_tree_t index_transfer_id;
+    cy_tree_t index_deadline;
+    cy_tree_t index_transfer_id;
 
-    struct cy_publisher_t* publisher;
-    enum cy_future_state_t state;
-    uint64_t               transfer_id_masked; ///< Masked as (platform->transfer_id_mask & transfer_id)
-    cy_us_t                deadline;           ///< We're indexing on this so it shall not be changed after insertion.
+    cy_publisher_t*   publisher;
+    cy_future_state_t state;
+    uint64_t          transfer_id_masked; ///< Masked as (platform->transfer_id_mask & transfer_id)
+    cy_us_t           deadline;           ///< We're indexing on this so it shall not be changed after insertion.
 
     /// These fields are populated once the response is received.
     /// The payload ownership is transferred to this structure.
     /// If a payload is already available when a response is received, Cy will free the old payload first.
     /// The user can detect when a new response is received by checking its timestamp.
-    struct cy_transfer_owned_t last_response;
+    cy_transfer_owned_t last_response;
 
     /// Only these fields can be altered by the user while the future is pending.
     /// The callback may be NULL if the application prefers to check last_response by polling.
@@ -242,26 +255,23 @@ struct cy_future_t
 /// The response_extent is the extent (maximum size) of the response payload if the publisher expects responses;
 /// if no response is expected/needed, the response_extent should be zero. If responses are needed but their maximum
 /// size is unknown, pick any sensible large value.
-cy_err_t               cy_advertise(struct cy_t* const           cy,
-                                    struct cy_publisher_t* const pub,
-                                    const struct wkv_str_t       name,
-                                    const size_t                 response_extent);
-static inline cy_err_t cy_advertise_c(struct cy_t* const           cy,
-                                      struct cy_publisher_t* const pub,
-                                      const char* const            name,
-                                      const size_t                 response_extent)
+cy_err_t cy_advertise(cy_t* const cy, cy_publisher_t* const pub, const wkv_str_t name, const size_t response_extent);
+static inline cy_err_t cy_advertise_c(cy_t* const           cy,
+                                      cy_publisher_t* const pub,
+                                      const char* const     name,
+                                      const size_t          response_extent)
 {
     return cy_advertise(cy, pub, wkv_key(name), response_extent);
 }
-void cy_unadvertise(struct cy_t* const cy, struct cy_publisher_t* pub);
+void cy_unadvertise(cy_t* const cy, cy_publisher_t* pub);
 
 /// Just a convenience function, nothing special.
 /// The initial future state is cy_future_fresh.
-void cy_future_new(struct cy_future_t* const future, const cy_future_callback_t callback, void* const user);
+void cy_future_new(cy_future_t* const future, const cy_future_callback_t callback, void* const user);
 
 /// This needs not be done after a future completes normally. It is only needed if the future needs to be
 /// destroyed before it completes. Calling this on a non-pending future has no effect.
-void cy_future_cancel(struct cy_future_t* const future);
+void cy_future_cancel(cy_future_t* const future);
 
 /// The transfer-ID is always incremented, even on failure, to signal lost messages.
 /// This function always publishes only one transfer as requested; no auxiliary traffic is generated.
@@ -274,18 +284,18 @@ void cy_future_cancel(struct cy_future_t* const future);
 /// The response future will not be registered unless the result is non-negative.
 ///
 /// If the response deadline is in the past, the message will be sent anyway but it will time out immediately.
-cy_err_t cy_publish(struct cy_t* const                cy,
-                    struct cy_publisher_t* const      pub,
-                    const cy_us_t                     tx_deadline,
-                    const struct cy_buffer_borrowed_t payload,
-                    const cy_us_t                     response_deadline,
-                    struct cy_future_t* const         future);
+cy_err_t cy_publish(cy_t* const                cy,
+                    cy_publisher_t* const      pub,
+                    const cy_us_t              tx_deadline,
+                    const cy_buffer_borrowed_t payload,
+                    const cy_us_t              response_deadline,
+                    cy_future_t* const         future);
 
 /// A simpler wrapper over cy_publish() when no response is needed/expected. 1 means one way.
-static inline cy_err_t cy_publish1(struct cy_t* const                cy,
-                                   struct cy_publisher_t* const      pub,
-                                   const cy_us_t                     tx_deadline,
-                                   const struct cy_buffer_borrowed_t payload)
+static inline cy_err_t cy_publish1(cy_t* const                cy,
+                                   cy_publisher_t* const      pub,
+                                   const cy_us_t              tx_deadline,
+                                   const cy_buffer_borrowed_t payload)
 {
     return cy_publish(cy, pub, tx_deadline, payload, 0, NULL);
 }
@@ -296,8 +306,8 @@ static inline cy_err_t cy_publish1(struct cy_t* const                cy,
 
 struct cy_substitution_t
 {
-    struct wkv_str_t str;     ///< The substring that matched the substitution token in the pattern. Not NUL-terminated.
-    size_t           ordinal; ///< Zero-based index of the substitution token as occurred in the pattern.
+    wkv_str_t str;     ///< The substring that matched the substitution token in the pattern. Not NUL-terminated.
+    size_t    ordinal; ///< Zero-based index of the substitution token as occurred in the pattern.
 };
 
 /// Optionally, the user handler can take ownership of the transfer payload by zeroing the origin pointer
@@ -305,9 +315,9 @@ struct cy_substitution_t
 /// subscribers that also match the same topic and are to receive the data after the current callback returns.
 struct cy_arrival_t
 {
-    struct cy_subscriber_t*     subscriber; ///< Which subscriber matched on this topic by verbatim name or pattern.
-    struct cy_topic_t*          topic;      ///< The specific topic that received the transfer.
-    struct cy_transfer_owned_t* transfer;   ///< The actual received message and its metadata.
+    cy_subscriber_t*     subscriber; ///< Which subscriber matched on this topic by verbatim name or pattern.
+    cy_topic_t*          topic;      ///< The specific topic that received the transfer.
+    cy_transfer_owned_t* transfer;   ///< The actual received message and its metadata.
 
     /// When a pattern match occurs, the matcher will store the string substitutions that had to be made to
     /// achieve the match. For example, if the pattern is "ins/?/data/*" and the key is "ins/0/data/foo/456",
@@ -316,11 +326,11 @@ struct cy_arrival_t
     ///  2. #1 "foo"
     ///  3. #1 "456"
     /// The lifetime of the substitutions is the same as the lifetime of the topic or subscriber, whichever is shorter.
-    size_t                          substitution_count; ///< The size of the following substitutions array.
-    const struct cy_substitution_t* substitutions;      ///< A contiguous array of substitutions.
+    size_t                   substitution_count; ///< The size of the following substitutions array.
+    const cy_substitution_t* substitutions;      ///< A contiguous array of substitutions.
 };
 
-typedef void (*cy_subscriber_callback_t)(struct cy_t*, const struct cy_arrival_t*);
+typedef void (*cy_subscriber_callback_t)(cy_t*, const cy_arrival_t*);
 
 /// These parameters are used to configure the underlying transport layer implementation.
 /// These values shall not be changed by the user; the only way to set them is when a new subscription is created.
@@ -338,9 +348,9 @@ struct cy_subscription_params_t
 struct cy_subscriber_t
 {
     struct cy_subscriber_root_t* root;
-    struct cy_subscriber_t*      next;
+    cy_subscriber_t*             next;
 
-    struct cy_subscription_params_t params;
+    cy_subscription_params_t params;
 
     /// The callback may be changed by the user at any time; e.g., to implement a state machine.
     /// The user field can be changed arbitrarily at any moment.
@@ -356,29 +366,29 @@ struct cy_subscriber_t
 /// plus it is usually slow.
 ///
 /// The complexity is about linear in the number of subscriptions.
-cy_err_t               cy_subscribe_with_params(struct cy_t* const                    cy,
-                                                struct cy_subscriber_t* const         sub,
-                                                const struct wkv_str_t                name,
-                                                const struct cy_subscription_params_t params,
-                                                const cy_subscriber_callback_t        callback);
-static inline cy_err_t cy_subscribe_with_params_c(struct cy_t* const                    cy,
-                                                  struct cy_subscriber_t* const         sub,
-                                                  const char* const                     name,
-                                                  const struct cy_subscription_params_t params,
-                                                  const cy_subscriber_callback_t        callback)
+cy_err_t               cy_subscribe_with_params(cy_t* const                    cy,
+                                                cy_subscriber_t* const         sub,
+                                                const wkv_str_t                name,
+                                                const cy_subscription_params_t params,
+                                                const cy_subscriber_callback_t callback);
+static inline cy_err_t cy_subscribe_with_params_c(cy_t* const                    cy,
+                                                  cy_subscriber_t* const         sub,
+                                                  const char* const              name,
+                                                  const cy_subscription_params_t params,
+                                                  const cy_subscriber_callback_t callback)
 {
     return cy_subscribe_with_params(cy, sub, wkv_key(name), params, callback);
 }
-static inline cy_err_t cy_subscribe_c(struct cy_t* const             cy,
-                                      struct cy_subscriber_t* const  sub,
+static inline cy_err_t cy_subscribe_c(cy_t* const                    cy,
+                                      cy_subscriber_t* const         sub,
                                       const char* const              name,
                                       const size_t                   extent,
                                       const cy_subscriber_callback_t callback)
 {
-    const struct cy_subscription_params_t params = { extent, CY_TRANSFER_ID_TIMEOUT_DEFAULT_us };
+    const cy_subscription_params_t params = { extent, CY_TRANSFER_ID_TIMEOUT_DEFAULT_us };
     return cy_subscribe_with_params_c(cy, sub, name, params, callback);
 }
-void cy_unsubscribe(struct cy_t* const cy, struct cy_subscriber_t* const sub);
+void cy_unsubscribe(cy_t* const cy, cy_subscriber_t* const sub);
 
 /// Send a response to a message received from a topic subscription. The response will be sent directly to the
 /// publisher using peer-to-peer transport, not affecting other nodes on this topic. The payload may be arbitrary
@@ -389,31 +399,35 @@ void cy_unsubscribe(struct cy_t* const cy, struct cy_subscriber_t* const sub);
 /// in the process but it doesn't matter.
 ///
 /// The response is sent using a P2P transfer to the publisher with the specified priority and the original transfer-ID.
-cy_err_t cy_respond(struct cy_t* const                  cy,
-                    struct cy_topic_t* const            topic,
-                    const cy_us_t                       tx_deadline,
-                    const struct cy_transfer_metadata_t metadata,
-                    const struct cy_buffer_borrowed_t   payload);
+cy_err_t cy_respond(cy_t* const                  cy,
+                    cy_topic_t* const            topic,
+                    const cy_us_t                tx_deadline,
+                    const cy_transfer_metadata_t metadata,
+                    const cy_buffer_borrowed_t   payload);
 
 /// Copies the subscriber name into the user-supplied buffer.
-void cy_subscriber_name(const struct cy_t* const cy, const struct cy_subscriber_t* const sub, char* const out_name);
+void cy_subscriber_name(const cy_t* const cy, const cy_subscriber_t* const sub, char* const out_name);
 
 // =====================================================================================================================
 //                                                  NODE & TOPIC
 // =====================================================================================================================
 
 /// A convenience wrapper that returns the current time in microseconds.
-cy_us_t cy_now(const struct cy_t* const cy);
+cy_us_t cy_now(const cy_t* const cy);
 
 /// If a node-ID is given explicitly at startup, it will be used as-is and the node will become operational immediately.
-/// Otherwise, some initial node-ID autoconfiguration time will be needed before the local ID is available.
-/// Also, if a node-ID conflict is found at any later time (e.g., if a badly configured node joins the network),
+/// Otherwise, some initial node-ID autoconfiguration time will be needed before the local ID is available
+/// (which amounts to a few seconds, depending on the number of participants).
+/// If a node-ID conflict is found at any later time (e.g., if a badly configured node joins the network),
 /// the current ID will be immediately replaced by a new one. This cannot happen in a well-managed network.
 ///
 /// Once this state is switched to true, it cannot go back to false while the node is operational.
 ///
-/// An attempt to emit a transfer while the local node-ID is missing may fail, depending on the transport library.
-bool cy_joined(const struct cy_t* const cy);
+/// An attempt to emit a transfer while the local node-ID is missing will force the library to allocate a new node-ID
+/// immediately based on the partially discovered node-ID occupancy state; this may result in a node-ID collision
+/// and thus may cause disturbances in the network. To avoid this, it is recommended to check this flag before
+/// publishing anything.
+bool cy_joined(const cy_t* const cy);
 
 /// A heuristical prediction of whether the local node is ready to fully participate in the network.
 /// The joining process will be bypassed if the node-ID and all topic allocations are recovered from non-volatile
@@ -424,7 +438,7 @@ bool cy_joined(const struct cy_t* const cy);
 /// any given state is final. It is always possible, for example, that while our network segment looks stable,
 /// it could actually be a partition of a larger network; when the partitions are rejoined, the younger and/or smaller
 /// partition will be forced to adapt to the main network, thus enduring a brief period of instability.
-bool cy_ready(const struct cy_t* const cy);
+bool cy_ready(const cy_t* const cy);
 
 /// If the topic configuration is restored from non-volatile memory or elsewhere, it can be supplied to the library
 /// via this function immediately after the topic is first created. This function should not be invoked at any other
@@ -436,39 +450,39 @@ bool cy_ready(const struct cy_t* const cy);
 /// operational immediately, without waiting for the CRDT consensus. Remember that the hint is discarded on conflict.
 ///
 /// The hint will be silently ignored if it is invalid, inapplicable, or if the topic is not freshly created.
-void cy_topic_hint(struct cy_t* const cy, struct cy_topic_t* const topic, const uint16_t subject_id);
+void cy_topic_hint(cy_t* const cy, cy_topic_t* const topic, const uint16_t subject_id);
 
 /// Complexity is logarithmic in the number of topics. NULL if not found.
 /// In practical terms, these queries are very fast and efficient.
-struct cy_topic_t*               cy_topic_find_by_name(const struct cy_t* const cy, const struct wkv_str_t name);
-static inline struct cy_topic_t* cy_topic_find_by_name_c(const struct cy_t* const cy, const char* const name)
+cy_topic_t*               cy_topic_find_by_name(const cy_t* const cy, const wkv_str_t name);
+static inline cy_topic_t* cy_topic_find_by_name_c(const cy_t* const cy, const char* const name)
 {
     return cy_topic_find_by_name(cy, wkv_key(name));
 }
-struct cy_topic_t* cy_topic_find_by_hash(const struct cy_t* const cy, const uint64_t hash);
-struct cy_topic_t* cy_topic_find_by_subject_id(const struct cy_t* const cy, const uint16_t subject_id);
+cy_topic_t* cy_topic_find_by_hash(const cy_t* const cy, const uint64_t hash);
+cy_topic_t* cy_topic_find_by_subject_id(const cy_t* const cy, const uint16_t subject_id);
 
 /// Iterate over all topics in an unspecified order.
 /// This is useful when handling IO multiplexing (building the list of descriptors to read) and for introspection.
 /// The iteration stops when the returned topic is NULL.
 /// The set of topics SHALL NOT be mutated while iterating over it (a restart will be needed otherwise).
 /// Usage:
-///     for (struct cy_topic_t* topic = cy_topic_iter_first(cy); topic != NULL; topic = cy_topic_iter_next(topic)) {
+///     for (cy_topic_t* topic = cy_topic_iter_first(cy); topic != NULL; topic = cy_topic_iter_next(topic)) {
 ///         ...
 ///     }
-struct cy_topic_t* cy_topic_iter_first(const struct cy_t* const cy);
-struct cy_topic_t* cy_topic_iter_next(struct cy_topic_t* const topic);
+cy_topic_t* cy_topic_iter_first(const cy_t* const cy);
+cy_topic_t* cy_topic_iter_next(cy_topic_t* const topic);
 
 /// Optionally, the application can use this to save the allocated subject-ID before shutting down/rebooting
 /// for instant recovery.
-uint16_t cy_topic_subject_id(const struct cy_topic_t* const topic);
+uint16_t cy_topic_subject_id(const cy_topic_t* const topic);
 
 /// The name is NUL-terminated; pointer lifetime bound to the topic.
-struct wkv_str_t cy_topic_name(const struct cy_topic_t* const topic);
+wkv_str_t cy_topic_name(const cy_topic_t* const topic);
 
 /// Returns true iff the name can match more than one topic.
 /// This is useful for some applications that want to ensure that certain names can match only one topic.
-bool               cy_has_substitution_tokens(const struct wkv_str_t name);
+bool               cy_has_substitution_tokens(const wkv_str_t name);
 static inline bool cy_has_substitution_tokens_c(const char* const name)
 {
     return cy_has_substitution_tokens(wkv_key(name));
@@ -484,12 +498,12 @@ static inline bool cy_has_substitution_tokens_c(const char* const name)
 /// is released; if not, it will do it automatically. The nullification of the pointers is thus required to make it
 /// explicit that the payload is no longer valid and to prevent double-free errors.
 /// Invoking this function on an already released payload has no effect and is safe.
-void cy_buffer_owned_release(struct cy_t* const cy, struct cy_buffer_owned_t* const payload);
+void cy_buffer_owned_release(cy_t* const cy, cy_buffer_owned_t* const payload);
 
 /// Returns the total size of all payload fragments in the chain.
 /// The complexity is linear, but the number of elements is very small (total size divided by MTU).
-size_t               cy_buffer_borrowed_size(const struct cy_buffer_borrowed_t payload);
-static inline size_t cy_buffer_owned_size(const struct cy_buffer_owned_t payload)
+size_t               cy_buffer_borrowed_size(const cy_buffer_borrowed_t payload);
+static inline size_t cy_buffer_owned_size(const cy_buffer_owned_t payload)
 {
     return cy_buffer_borrowed_size(payload.base);
 }
@@ -499,8 +513,8 @@ static inline size_t cy_buffer_owned_size(const struct cy_buffer_owned_t payload
 /// copying will stop early after the buffer is filled, thus truncating the fragmented data short.
 /// The function has no effect and returns zero if the destination buffer is NULL.
 /// Returns the number of bytes copied into the contiguous destination buffer.
-size_t cy_buffer_borrowed_gather(const struct cy_buffer_borrowed_t payload, const struct cy_bytes_mut_t dest);
-static inline size_t cy_buffer_owned_gather(const struct cy_buffer_owned_t payload, const struct cy_bytes_mut_t dest)
+size_t               cy_buffer_borrowed_gather(const cy_buffer_borrowed_t payload, const cy_bytes_mut_t dest);
+static inline size_t cy_buffer_owned_gather(const cy_buffer_owned_t payload, const cy_bytes_mut_t dest)
 {
     return cy_buffer_borrowed_gather(payload.base, dest);
 }

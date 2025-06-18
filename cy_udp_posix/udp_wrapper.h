@@ -32,6 +32,11 @@ extern "C"
 {
 #endif
 
+#ifndef __cplusplus
+typedef struct udp_wrapper_tx_t udp_wrapper_tx_t;
+typedef struct udp_wrapper_rx_t udp_wrapper_rx_t;
+#endif
+
 /// These definitions are highly platform-specific.
 /// Note that LibUDPard does not require the same socket to be usable for both transmission and reception.
 struct udp_wrapper_tx_t
@@ -48,12 +53,12 @@ struct udp_wrapper_rx_t
 };
 
 /// Helpers for constructing uninitialized handles.
-struct udp_wrapper_tx_t udp_wrapper_tx_new(void);
-struct udp_wrapper_rx_t udp_wrapper_rx_new(void);
+udp_wrapper_tx_t udp_wrapper_tx_new(void);
+udp_wrapper_rx_t udp_wrapper_rx_new(void);
 
 /// Return false unless the handle has been successfully initialized and not yet closed.
-bool udp_wrapper_tx_is_initialized(const struct udp_wrapper_tx_t* const self);
-bool udp_wrapper_rx_is_initialized(const struct udp_wrapper_rx_t* const self);
+bool udp_wrapper_tx_is_initialized(const udp_wrapper_tx_t* const self);
+bool udp_wrapper_rx_is_initialized(const udp_wrapper_rx_t* const self);
 
 /// Initialize a TX socket for use with LibUDPard.
 /// The local iface address is used to specify the egress interface for multicast traffic.
@@ -66,23 +71,23 @@ bool udp_wrapper_rx_is_initialized(const struct udp_wrapper_rx_t* const self);
 /// of the TX socket. I am not sure if there is a better way of ignoring own datagrams.
 ///
 /// On error returns a negative error code.
-int16_t udp_wrapper_tx_init(struct udp_wrapper_tx_t* const self,
-                            const uint32_t                 local_iface_address,
-                            uint16_t* const                local_port);
+int16_t udp_wrapper_tx_init(udp_wrapper_tx_t* const self,
+                            const uint32_t          local_iface_address,
+                            uint16_t* const         local_port);
 
 /// Send a datagram to the specified endpoint without blocking using the specified IP DSCP field value.
 /// A real-time embedded system should normally accept a transmission deadline here for the networking stack.
 /// Returns 1 on success, 0 if the socket is not ready for sending, or a negative error code.
-int16_t udp_wrapper_tx_send(struct udp_wrapper_tx_t* const self,
-                            const uint32_t                 remote_address,
-                            const uint16_t                 remote_port,
-                            const uint8_t                  dscp,
-                            const size_t                   payload_size,
-                            const void* const              payload);
+int16_t udp_wrapper_tx_send(udp_wrapper_tx_t* const self,
+                            const uint32_t          remote_address,
+                            const uint16_t          remote_port,
+                            const uint8_t           dscp,
+                            const size_t            payload_size,
+                            const void* const       payload);
 
 /// No effect if the argument is invalid.
 /// This function is guaranteed to invalidate the handle.
-void udp_wrapper_tx_close(struct udp_wrapper_tx_t* const self);
+void udp_wrapper_tx_close(udp_wrapper_tx_t* const self);
 
 /// Initialize an RX socket for use with LibUDPard, for subscription to subjects or for RPC traffic.
 /// The socket will be bound to the specified multicast group and port.
@@ -90,11 +95,11 @@ void udp_wrapper_tx_close(struct udp_wrapper_tx_t* const self);
 /// because it is used to decide which egress port to send IGMP membership reports over.
 /// Dgrams whose source port matches the specified deny_source_port will be ignored; this is to ignore own tx dgrams.
 /// On error returns a negative error code.
-int16_t udp_wrapper_rx_init(struct udp_wrapper_rx_t* const self,
-                            const uint32_t                 local_iface_address,
-                            const uint32_t                 multicast_group,
-                            const uint16_t                 remote_port,
-                            const uint16_t                 deny_source_port);
+int16_t udp_wrapper_rx_init(udp_wrapper_rx_t* const self,
+                            const uint32_t          local_iface_address,
+                            const uint32_t          multicast_group,
+                            const uint16_t          remote_port,
+                            const uint16_t          deny_source_port);
 
 /// Read one datagram from the socket without blocking.
 /// The size of the destination buffer is specified in inout_payload_size; it is updated to the actual size of the
@@ -107,13 +112,11 @@ int16_t udp_wrapper_rx_init(struct udp_wrapper_rx_t* const self,
 ///     1 on success
 ///     0 if the socket is not ready for reading OR if the received dgram is a looped back own datagram
 ///     negative error code
-int16_t udp_wrapper_rx_receive(struct udp_wrapper_rx_t* const self,
-                               size_t* const                  inout_payload_size,
-                               void* const                    out_payload);
+int16_t udp_wrapper_rx_receive(udp_wrapper_rx_t* const self, size_t* const inout_payload_size, void* const out_payload);
 
 /// No effect if the argument is invalid.
 /// This function is guaranteed to invalidate the handle.
-void udp_wrapper_rx_close(struct udp_wrapper_rx_t* const self);
+void udp_wrapper_rx_close(udp_wrapper_rx_t* const self);
 
 /// Suspend execution until the expiration of the timeout (in microseconds) or until any of the specified handles
 /// become ready for reading (the RX group) or writing (the TX group). Upon completion, handle pointers that are
@@ -128,11 +131,11 @@ void udp_wrapper_rx_close(struct udp_wrapper_rx_t* const self);
 ///     struct void* rx_context[max_rx_handles];                // Parallel array of context data.
 ///     int16_t err = udp_wrapper_wait(timeout_us, UDPARD_IFACE_COUNT_MAX, tx_handles, max_rx_handles, rx_handles);
 ///     // Then handle the results.
-int16_t udp_wrapper_wait(const int64_t                   timeout_us,
-                         const size_t                    tx_count,
-                         struct udp_wrapper_tx_t** const tx,
-                         const size_t                    rx_count,
-                         struct udp_wrapper_rx_t** const rx);
+int16_t udp_wrapper_wait(const int64_t            timeout_us,
+                         const size_t             tx_count,
+                         udp_wrapper_tx_t** const tx,
+                         const size_t             rx_count,
+                         udp_wrapper_rx_t** const rx);
 
 /// Convert an interface address from string to binary representation; e.g., "127.0.0.1" --> 0x7F000001.
 /// Returns zero if the address is not recognized.

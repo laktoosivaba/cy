@@ -61,28 +61,28 @@ static uint32_t get_local_iface_index(const uint32_t local_iface_address)
     return idx;
 }
 
-struct udp_wrapper_tx_t udp_wrapper_tx_new(void)
+udp_wrapper_tx_t udp_wrapper_tx_new(void)
 {
-    return (struct udp_wrapper_tx_t){ .fd = -1 };
+    return (udp_wrapper_tx_t){ .fd = -1 };
 }
-struct udp_wrapper_rx_t udp_wrapper_rx_new(void)
+udp_wrapper_rx_t udp_wrapper_rx_new(void)
 {
-    return (struct udp_wrapper_rx_t){ .fd = -1 };
+    return (udp_wrapper_rx_t){ .fd = -1 };
 }
 
 /// Return false unless the handle has been successfully initialized and not yet closed.
-bool udp_wrapper_tx_is_initialized(const struct udp_wrapper_tx_t* const self)
+bool udp_wrapper_tx_is_initialized(const udp_wrapper_tx_t* const self)
 {
     return self->fd >= 0;
 }
-bool udp_wrapper_rx_is_initialized(const struct udp_wrapper_rx_t* const self)
+bool udp_wrapper_rx_is_initialized(const udp_wrapper_rx_t* const self)
 {
     return self->fd >= 0;
 }
 
-int16_t udp_wrapper_tx_init(struct udp_wrapper_tx_t* const self,
-                            const uint32_t                 local_iface_address,
-                            uint16_t* const                local_port)
+int16_t udp_wrapper_tx_init(udp_wrapper_tx_t* const self,
+                            const uint32_t          local_iface_address,
+                            uint16_t* const         local_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0)) {
@@ -119,12 +119,12 @@ int16_t udp_wrapper_tx_init(struct udp_wrapper_tx_t* const self,
     return res;
 }
 
-int16_t udp_wrapper_tx_send(struct udp_wrapper_tx_t* const self,
-                            const uint32_t                 remote_address,
-                            const uint16_t                 remote_port,
-                            const uint8_t                  dscp,
-                            const size_t                   payload_size,
-                            const void* const              payload)
+int16_t udp_wrapper_tx_send(udp_wrapper_tx_t* const self,
+                            const uint32_t          remote_address,
+                            const uint16_t          remote_port,
+                            const uint8_t           dscp,
+                            const size_t            payload_size,
+                            const void* const       payload)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (self->fd >= 0) && (remote_address > 0) && (remote_port > 0) && (payload != NULL) &&
@@ -150,7 +150,7 @@ int16_t udp_wrapper_tx_send(struct udp_wrapper_tx_t* const self,
     return res;
 }
 
-void udp_wrapper_tx_close(struct udp_wrapper_tx_t* const self)
+void udp_wrapper_tx_close(udp_wrapper_tx_t* const self)
 {
     if ((self != NULL) && (self->fd >= 0)) {
         (void)close(self->fd);
@@ -158,11 +158,11 @@ void udp_wrapper_tx_close(struct udp_wrapper_tx_t* const self)
     }
 }
 
-int16_t udp_wrapper_rx_init(struct udp_wrapper_rx_t* const self,
-                            const uint32_t                 local_iface_address,
-                            const uint32_t                 multicast_group,
-                            const uint16_t                 remote_port,
-                            const uint16_t                 deny_source_port)
+int16_t udp_wrapper_rx_init(udp_wrapper_rx_t* const self,
+                            const uint32_t          local_iface_address,
+                            const uint32_t          multicast_group,
+                            const uint16_t          remote_port,
+                            const uint16_t          deny_source_port)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (local_iface_address > 0) && is_multicast(multicast_group) && (remote_port > 0)) {
@@ -212,9 +212,7 @@ int16_t udp_wrapper_rx_init(struct udp_wrapper_rx_t* const self,
     return res;
 }
 
-int16_t udp_wrapper_rx_receive(struct udp_wrapper_rx_t* const self,
-                               size_t* const                  inout_payload_size,
-                               void* const                    out_payload)
+int16_t udp_wrapper_rx_receive(udp_wrapper_rx_t* const self, size_t* const inout_payload_size, void* const out_payload)
 {
     int16_t res = -EINVAL;
     if ((self != NULL) && (self->fd >= 0) && (inout_payload_size != NULL) && (out_payload != NULL)) {
@@ -258,7 +256,7 @@ int16_t udp_wrapper_rx_receive(struct udp_wrapper_rx_t* const self,
     return res;
 }
 
-void udp_wrapper_rx_close(struct udp_wrapper_rx_t* const self)
+void udp_wrapper_rx_close(udp_wrapper_rx_t* const self)
 {
     if ((self != NULL) && (self->fd >= 0)) {
         (void)close(self->fd);
@@ -266,11 +264,11 @@ void udp_wrapper_rx_close(struct udp_wrapper_rx_t* const self)
     }
 }
 
-int16_t udp_wrapper_wait(const int64_t                   timeout_us,
-                         const size_t                    tx_count,
-                         struct udp_wrapper_tx_t** const tx,
-                         const size_t                    rx_count,
-                         struct udp_wrapper_rx_t** const rx)
+int16_t udp_wrapper_wait(const int64_t            timeout_us,
+                         const size_t             tx_count,
+                         udp_wrapper_tx_t** const tx,
+                         const size_t             rx_count,
+                         udp_wrapper_rx_t** const rx)
 {
     int16_t       res         = -EINVAL;
     const size_t  total_count = tx_count + rx_count;

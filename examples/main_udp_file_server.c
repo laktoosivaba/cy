@@ -23,7 +23,7 @@ static uint64_t random_uid(void)
 /// Response schema:
 ///     uint32      errno
 ///     byte[<=256] data
-void on_file_read_msg(struct cy_t* const cy, const struct cy_arrival_t* const arv)
+void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
 {
     CY_BUFFER_GATHER_ON_STACK(payload, arv->transfer->payload.base)
     if ((payload.size < 10) || (payload.size > (256 + 2 + 8))) {
@@ -74,7 +74,7 @@ void on_file_read_msg(struct cy_t* const cy, const struct cy_arrival_t* const ar
                      arv->topic, //
                      arv->transfer->timestamp + 1000000,
                      arv->transfer->metadata,
-                     (struct cy_buffer_borrowed_t){ .view = { .data = &response, .size = response.data_len + 6 } });
+                     (cy_buffer_borrowed_t){ .view = { .data = &response, .size = response.data_len + 6 } });
 }
 
 /// The only command line argument is the node namespace.
@@ -83,8 +83,8 @@ int main(const int argc, char* argv[])
     srand((unsigned)time(NULL));
 
     // SET UP THE NODE. This is the only platform-specific part; the rest is platform- and transport-agnostic.
-    struct cy_udp_posix_t cy_udp;
-    cy_err_t              res = cy_udp_posix_new_c(&cy_udp,
+    cy_udp_posix_t cy_udp;
+    cy_err_t       res = cy_udp_posix_new_c(&cy_udp,
                                       random_uid(),
                                       (argc > 1) ? argv[1] : "~",
                                       (uint32_t[3]){ udp_wrapper_parse_iface_address("127.0.0.1") },
@@ -92,10 +92,10 @@ int main(const int argc, char* argv[])
     if (res != CY_OK) {
         errx(res, "cy_udp_posix_new");
     }
-    struct cy_t* const cy = &cy_udp.base;
+    cy_t* const cy = &cy_udp.base;
 
     // SET UP THE FILE READ SUBSCRIBER.
-    struct cy_subscriber_t sub_file_read;
+    cy_subscriber_t sub_file_read;
     res = cy_subscribe_c(cy, &sub_file_read, "file/read", 1024, on_file_read_msg);
     if (res != CY_OK) {
         errx(res, "cy_subscribe_c");

@@ -47,6 +47,10 @@ extern "C"
 {
 #endif
 
+#ifndef __cplusplus
+typedef struct cy_platform_t cy_platform_t;
+#endif
+
 /// When a response to a received message is sent, it is delivered as a P2P transfer to this service-ID.
 /// The response user data is prefixed with 8 bytes of the full topic hash to which we are responding.
 /// The receiver of the response will be able to match the response with a specific request using the transfer-ID.
@@ -87,15 +91,23 @@ extern "C"
 /// Conflict resolution may result in a temporary jitter if it happens to occur near log2(age) integer boundary.
 struct cy_topic_t
 {
-    struct cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
-    struct cy_tree_t index_subject_id;
-    struct cy_tree_t index_gossip_order;
+    cy_tree_t index_hash; ///< Hash index handle MUST be the first field.
+    cy_tree_t index_subject_id;
+    cy_tree_t index_gossip_order;
 
-    struct wkv_node_t* index_name;
+    wkv_node_t* index_name;
 
     /// The name length is stored in index_name.
     /// We need to store the full name to allow valid references from name substitutions during pattern matching.
     char name[CY_TOPIC_NAME_MAX + 1];
+
+    /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
+    /// eviction counter incremented. The eviction counter is used as a Lamport clock counting the loss events.
+    /// Higher clock wins because it implies that any lower value is non-viable since it has been known to cause
+    /// at least one collision anywhere on the network. The counter MUST NOT BE CHANGED without removing the topic
+    /// from the subject-ID index tree!
+    /// Remember that the subject-ID is (for non-pinned topics): (hash+evictions)%topic_count.
+    uint32_t evictions;
 
     /// Assuming we have 1000 topics, the probability of a topic name hash collision is:
     /// >>> from decimal import Decimal
@@ -105,14 +117,6 @@ struct cy_topic_t
     /// About 2.7e-14, or one in 37 trillion.
     /// For pinned topics, the name hash equals the subject-ID.
     uint64_t hash;
-
-    /// Whenever a topic conflicts with another one locally, arbitration is performed, and the loser has its
-    /// eviction counter incremented. The eviction counter is used as a Lamport clock counting the loss events.
-    /// Higher clock wins because it implies that any lower value is non-viable since it has been known to cause
-    /// at least one collision anywhere on the network. The counter MUST NOT BE CHANGED without removing the topic
-    /// from the subject-ID index tree!
-    /// Remember that the subject-ID is (for non-pinned topics): (hash+evictions)%topic_count.
-    uint32_t evictions;
 
     /// Currently, the age is increased locally as follows:
     ///
@@ -145,11 +149,11 @@ struct cy_topic_t
 
     /// Mortal topics are ordered by last animation time, which is used to determine which topic to retire next.
     /// Mortal topics are distinguished from ordinary topics by being in the list.
-    struct cy_topic_t* mortal_next;
-    struct cy_topic_t* mortal_prev;
+    cy_topic_t* mortal_next;
+    cy_topic_t* mortal_prev;
 
     /// Used for matching futures against received responses.
-    struct cy_tree_t* futures_by_transfer_id;
+    cy_tree_t* futures_by_transfer_id;
 
     /// Only used if the application publishes data on this topic.
     /// pub_count tracks the number of existing advertisements on this topic; when this number reaches zero
@@ -163,12 +167,12 @@ struct cy_topic_t
 };
 
 /// Returns the current monotonic time in microseconds. The initial time shall be non-negative.
-typedef cy_us_t (*cy_platform_now_t)(const struct cy_t*);
+typedef cy_us_t (*cy_platform_now_t)(const cy_t*);
 
 /// The semantics are per the standard realloc from stdlib, except:
 /// - If the fragment is not increased in size, reallocation MUST succeed.
 /// - If the size is zero, it must behave like free() (which is often the case in realloc() but technically an UB).
-typedef void* (*cy_platform_realloc_t)(struct cy_t*, void*, size_t);
+typedef void* (*cy_platform_realloc_t)(cy_t*, void*, size_t);
 
 /// Returns a PRNG hashing seed or a full pseudo-random 64-bit unsigned integer.
 /// A TRNG is preferred; if not available, a PRNG will suffice, but its initial state SHOULD be likely to be
@@ -190,18 +194,18 @@ typedef void* (*cy_platform_realloc_t)(struct cy_t*, void*, size_t);
 ///
 /// Internally, Cy will hash the returned value with the local node's UID for whitening and to ensure that each node
 /// obtains different sequences even if they all share the same PRNG source.
-typedef uint64_t (*cy_platform_prng_t)(const struct cy_t*);
+typedef uint64_t (*cy_platform_prng_t)(const cy_t*);
 
 /// Return payload memory obtained with received transfers via cy_ingest*().
 /// The head is passed by value so not freed, but its data and all other fragments are.
-typedef void (*cy_platform_buffer_release_t)(struct cy_t*, struct cy_buffer_owned_t);
+typedef void (*cy_platform_buffer_release_t)(cy_t*, cy_buffer_owned_t);
 
 /// Instructs the underlying transport to adopt the new node-ID.
 /// This is invoked either immediately from cy_new() if an explicit node-ID is given,
 /// or after some time from cy_update() when one is allocated automatically.
 /// When this function is invoked, cy_t contains a valid node-ID.
 /// Cy guarantees that this function will not be invoked unless the node-ID is currently unset.
-typedef cy_err_t (*cy_platform_node_id_set_t)(struct cy_t*);
+typedef cy_err_t (*cy_platform_node_id_set_t)(cy_t*);
 
 /// Instructs the underlying transport to abandon the current node-ID. Notice that this function is infallible.
 /// This is invoked only if a node-ID conflict is detected; in a well-managed network this should never happen.
@@ -209,7 +213,7 @@ typedef cy_err_t (*cy_platform_node_id_set_t)(struct cy_t*);
 /// one solution is to simply restart the node.
 /// It is recommended to purge the tx queue to avoid further collisions.
 /// Cy guarantees that this function will not be invoked unless the node-ID is currently set.
-typedef void (*cy_platform_node_id_clear_t)(struct cy_t*);
+typedef void (*cy_platform_node_id_clear_t)(cy_t*);
 
 /// The node-ID occupancy Bloom filter is used to track the occupancy of the node-ID space. The filter must be at least
 /// a single 64-bit word long. The number of bits in the filter (64 times the word count) defines the maximum number
@@ -220,38 +224,35 @@ typedef void (*cy_platform_node_id_clear_t)(struct cy_t*);
 /// The filter is entirely managed by Cy, but its size depends on the transport layer (and how it's configured),
 /// so the filter is not allocated by Cy. Instead, it is accessed indirectly via this function.
 /// Every invocation returns a mutable borrowed reference to the filter, which outlives the Cy instance.
-typedef struct cy_bloom64_t* (*cy_platform_node_id_bloom_t)(struct cy_t*);
+typedef cy_bloom64_t* (*cy_platform_node_id_bloom_t)(cy_t*);
 
 /// Instructs the underlying transport layer to send a peer-to-peer transfer.
-typedef cy_err_t (*cy_platform_p2p_t)(struct cy_t*,
-                                      uint16_t                            service_id,
-                                      const struct cy_transfer_metadata_t metadata,
-                                      cy_us_t                             tx_deadline,
-                                      struct cy_buffer_borrowed_t         payload);
+typedef cy_err_t (*cy_platform_p2p_t)(cy_t*,
+                                      uint16_t                     service_id,
+                                      const cy_transfer_metadata_t metadata,
+                                      cy_us_t                      tx_deadline,
+                                      cy_buffer_borrowed_t         payload);
 
 /// Allocates a new topic. NULL if out of memory.
-typedef struct cy_topic_t* (*cy_platform_topic_new_t)(struct cy_t*);
+typedef cy_topic_t* (*cy_platform_topic_new_t)(cy_t*);
 
-typedef void (*cy_platform_topic_destroy_t)(struct cy_t*, struct cy_topic_t*);
+typedef void (*cy_platform_topic_destroy_t)(cy_t*, cy_topic_t*);
 
 /// Instructs the underlying transport layer to publish a new message on the topic.
 /// The function shall not increment the transfer-ID counter; Cy will do it.
-typedef cy_err_t (*cy_platform_topic_publish_t)(struct cy_t*,
-                                                struct cy_publisher_t*,
-                                                cy_us_t,
-                                                struct cy_buffer_borrowed_t);
+typedef cy_err_t (*cy_platform_topic_publish_t)(cy_t*, cy_publisher_t*, cy_us_t, cy_buffer_borrowed_t);
 
 /// Instructs the underlying transport layer to create a new subscription on the topic.
-typedef cy_err_t (*cy_platform_topic_subscribe_t)(struct cy_t*, struct cy_topic_t*, struct cy_subscription_params_t);
+typedef cy_err_t (*cy_platform_topic_subscribe_t)(cy_t*, cy_topic_t*, cy_subscription_params_t);
 
 /// Instructs the underlying transport to destroy an existing subscription.
-typedef void (*cy_platform_topic_unsubscribe_t)(struct cy_t*, struct cy_topic_t*);
+typedef void (*cy_platform_topic_unsubscribe_t)(cy_t*, cy_topic_t*);
 
 /// Invoked when a new publisher is created on the topic.
 /// The main purpose here is to communicate the response extent requested by this publisher to the platform layer,
 /// allowing it to configure the P2P session accordingly.
 /// The requested extent is adjusted for any protocol overheads, so that the platform layer does not have to handle it.
-typedef void (*cy_platform_topic_advertise_t)(struct cy_t*, struct cy_topic_t*, size_t response_extent_with_overhead);
+typedef void (*cy_platform_topic_advertise_t)(cy_t*, cy_topic_t*, size_t response_extent_with_overhead);
 
 /// If a subject-ID collision or divergence are discovered, Cy may reassign the topic to a different subject-ID.
 /// To do that, it will first unsubscribe the topic using the corresponding function,
@@ -265,7 +266,7 @@ typedef void (*cy_platform_topic_advertise_t)(struct cy_t*, struct cy_topic_t*, 
 ///
 /// Normally, the error handler does not need to do anything specific aside from perhaps logging/reporting the error.
 /// Cy will keep attempting to repair the topic periodically when relevant heartbeats are received.
-typedef void (*cy_platform_topic_on_subscription_error_t)(struct cy_t*, struct cy_topic_t*, const cy_err_t);
+typedef void (*cy_platform_topic_on_subscription_error_t)(cy_t*, cy_topic_t*, const cy_err_t);
 
 /// The platform- and transport-specific entities. These can be underpinned by libcanard, libudpard, libserard,
 /// or any other transport library, plus the platform-specific logic.
@@ -313,7 +314,7 @@ struct cy_platform_t
 /// and by default publish 1 heartbeat per second.
 struct cy_t
 {
-    const struct cy_platform_t* platform; ///< Never NULL.
+    const cy_platform_t* platform; ///< Never NULL.
 
     /// Namespace is a prefix added to all topics created on this instance, unless the topic name starts with "/".
     /// Local node name is prefixed to the topic name if it starts with `~`.
@@ -339,38 +340,38 @@ struct cy_t
 
     /// See the topic definition.
     /// Most recently animated mortal topics at at the head of the list.
-    cy_us_t            mortal_topic_timeout;
-    struct cy_topic_t* mortal_head;
-    struct cy_topic_t* mortal_tail;
+    cy_us_t     mortal_topic_timeout;
+    cy_topic_t* mortal_head;
+    cy_topic_t* mortal_tail;
 
     /// Heartbeat topic and related items.
     /// The heartbeat period can be changed at any time, but it must not exceed 1 second.
     /// The max period is used when there are no urgent gossips or scout responses to publish;
     /// otherwise, the min period is used to throttle the heartbeat traffic.
-    struct cy_publisher_t  heartbeat_pub;
-    struct cy_subscriber_t heartbeat_sub;
-    cy_us_t                heartbeat_next;
-    cy_us_t                heartbeat_last;
-    cy_us_t                heartbeat_period_max; ///< Not greater than 1 second.
-    cy_us_t                heartbeat_period_min; ///< Not greater than heartbeat_period_max.
+    cy_publisher_t  heartbeat_pub;
+    cy_subscriber_t heartbeat_sub;
+    cy_us_t         heartbeat_next;
+    cy_us_t         heartbeat_last;
+    cy_us_t         heartbeat_period_max; ///< Not greater than 1 second.
+    cy_us_t         heartbeat_period_min; ///< Not greater than heartbeat_period_max.
 
     /// Topics have multiple indexes.
-    struct cy_tree_t* topics_by_hash;
-    struct cy_tree_t* topics_by_subject_id;
-    struct cy_tree_t* topics_by_gossip_time;
-    struct wkv_t      topics_by_name;
+    cy_tree_t* topics_by_hash;
+    cy_tree_t* topics_by_subject_id;
+    cy_tree_t* topics_by_gossip_time;
+    wkv_t      topics_by_name;
 
     /// When a heartbeat is received, its topic name will be compared against the patterns,
     /// and if a match is found, a new subscription will be constructed automatically.
     /// The values of these tree nodes point to instances of cy_subscriber_root_t.
-    struct wkv_t subscribers_by_name;    ///< Both verbatim and patterns.
-    struct wkv_t subscribers_by_pattern; ///< Only patterns for automatic subscriptions on heartbeat.
+    wkv_t subscribers_by_name;    ///< Both verbatim and patterns.
+    wkv_t subscribers_by_pattern; ///< Only patterns for automatic subscriptions on heartbeat.
 
     /// Only for pattern subscriptions.
     struct cy_subscriber_root_t* next_scout;
 
     /// For detecting timed out futures. This index spans all topics.
-    struct cy_tree_t* futures_by_deadline;
+    cy_tree_t* futures_by_deadline;
 
     /// This is to ensure we don't exhaust the subject-ID space.
     size_t topic_count;
@@ -388,12 +389,12 @@ struct cy_t
 ///
 /// The namespace may be NULL or empty, in which case it defaults to `~`.
 /// It may begin with `~`, which expands into the node name.
-cy_err_t cy_new(struct cy_t* const                cy,
-                const struct cy_platform_t* const platform,
-                const uint64_t                    uid,
-                const uint16_t                    node_id,
-                const struct wkv_str_t            namespace_);
-void     cy_destroy(struct cy_t* const cy);
+cy_err_t cy_new(cy_t* const                cy,
+                const cy_platform_t* const platform,
+                const uint64_t             uid,
+                const uint16_t             node_id,
+                const wkv_str_t            namespace_);
+void     cy_destroy(cy_t* const cy);
 
 /// This function must be invoked periodically to let the library publish heartbeats and handle response timeouts.
 /// The most efficient invocation schedule is guided by cy->heartbeat_next, but not less often than every 10 ms;
@@ -408,7 +409,7 @@ void     cy_destroy(struct cy_t* const cy);
 /// This function is also responsible for handling the local node-ID allocation.
 ///
 /// Excluding the transport_publish dependency, the time complexity is logarithmic in the number of topics.
-cy_err_t cy_update(struct cy_t* const cy);
+cy_err_t cy_update(cy_t* const cy);
 
 /// When the transport library detects a topic hash error, it will notify Cy about it to let it rectify the
 /// problem. Transport frames with mismatched topic hash must be dropped; no processing at the transport layer
@@ -422,7 +423,7 @@ cy_err_t cy_update(struct cy_t* const cy);
 /// cy_topic_find_by_subject_id(). The function has no effect if the topic is NULL; it is not an error to call it
 /// with NULL to simplify chaining like:
 ///     cy_notify_topic_hash_collision(cy_topic_find_by_subject_id(cy, collision_subject_id));
-void cy_notify_topic_hash_collision(struct cy_t* const cy, struct cy_topic_t* const topic);
+void cy_notify_topic_hash_collision(cy_t* const cy, cy_topic_t* const topic);
 
 /// When the transport library detects an incoming transport frame with the same source node-ID as the local node-ID,
 /// it must notify Cy about it to let it rectify the problem.
@@ -434,7 +435,7 @@ void cy_notify_topic_hash_collision(struct cy_t* const cy, struct cy_topic_t* co
 /// Note that the node-ID collision checks must be done on raw transport frames, not on reassembled transfers, for
 /// two reasons: 1. this is faster, allowing quick reaction; 2. in the presence of a node-ID conflict, transfers
 /// arriving from that ID cannot be robustly reassembled.
-void cy_notify_node_id_collision(struct cy_t* const cy);
+void cy_notify_node_id_collision(cy_t* const cy);
 
 /// This is invoked whenever a new transfer on the topic is received.
 /// The library will dispatch it to the appropriate subscriber callbacks.
@@ -443,9 +444,7 @@ void cy_notify_node_id_collision(struct cy_t* const cy);
 ///
 /// If this is invoked together with cy_update(), then cy_ingest() must be invoked BEFORE cy_update()
 /// to ensure that the latest state updates are reflected in the next heartbeat message.
-void cy_ingest_topic_transfer(struct cy_t* const         cy,
-                              struct cy_topic_t* const   topic,
-                              struct cy_transfer_owned_t transfer);
+void cy_ingest_topic_transfer(cy_t* const cy, cy_topic_t* const topic, cy_transfer_owned_t transfer);
 
 /// Cy does not manage P2P endpoints explicitly; it is the responsibility of the transport-specific glue logic.
 /// Currently, the following P2P endpoints must be implemented in the glue logic:
@@ -453,12 +452,12 @@ void cy_ingest_topic_transfer(struct cy_t* const         cy,
 ///     - CY_P2P_SERVICE_ID_TOPIC_RESPONSE handler.
 ///       Delivers the optional response to a message published on a topic.
 ///       The first 8 bytes of the transfer payload are the topic hash to which the response is sent.
-void cy_ingest_topic_response_transfer(struct cy_t* const cy, struct cy_transfer_owned_t transfer);
+void cy_ingest_topic_response_transfer(cy_t* const cy, cy_transfer_owned_t transfer);
 
 /// For diagnostics and logging only. Do not use in embedded and real-time applications.
 /// This function is only required if CY_CONFIG_TRACE is defined and is nonzero; otherwise it should be left undefined.
 /// Other modules that build on Cy can also use it; e.g., transport-specific glue modules.
-extern void cy_trace(struct cy_t* const  cy,
+extern void cy_trace(cy_t* const         cy,
                      const char* const   file,
                      const uint_fast16_t line,
                      const char* const   func,

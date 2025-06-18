@@ -151,7 +151,7 @@ static struct config_t load_config(const int argc, char* argv[])
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static void on_msg_trace(struct cy_t* const cy, const struct cy_arrival_t* const arv)
+static void on_msg_trace(cy_t* const cy, const cy_arrival_t* const arv)
 {
     CY_BUFFER_GATHER_ON_STACK(payload, arv->transfer->payload.base)
 
@@ -198,11 +198,11 @@ static void on_msg_trace(struct cy_t* const cy, const struct cy_arrival_t* const
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-static void on_response_trace(struct cy_t* const cy, struct cy_future_t* const future)
+static void on_response_trace(cy_t* const cy, cy_future_t* const future)
 {
-    struct cy_topic_t* topic = future->publisher->topic;
+    cy_topic_t* topic = future->publisher->topic;
     if (future->state == cy_future_success) {
-        struct cy_transfer_owned_t* const transfer = &future->last_response;
+        cy_transfer_owned_t* const transfer = &future->last_response;
         CY_BUFFER_GATHER_ON_STACK(payload, transfer->payload.base)
 
         // Convert payload to hex.
@@ -254,7 +254,7 @@ int main(const int argc, char* argv[])
 
     // Set up the node instance. The initialization is the only platform-specific part.
     // The rest of the API is platform- and transport-agnostic.
-    struct cy_udp_posix_t cy_udp_posix;
+    cy_udp_posix_t cy_udp_posix;
     {
         const cy_err_t res = cy_udp_posix_new_c(&cy_udp_posix, //
                                                 cfg.local_uid,
@@ -266,7 +266,7 @@ int main(const int argc, char* argv[])
             return 1;
         }
     }
-    struct cy_t* const cy = &cy_udp_posix.base;
+    cy_t* const cy = &cy_udp_posix.base;
 
     // This is just for debugging purposes.
     cy->mortal_topic_timeout = 10000000;
@@ -274,8 +274,8 @@ int main(const int argc, char* argv[])
     // ------------------------------  End of the platform- and transport-specific part  ------------------------------
 
     // Create publishers.
-    struct cy_publisher_t publishers[cfg.pub_count];
-    struct cy_future_t    futures[cfg.pub_count];
+    cy_publisher_t publishers[cfg.pub_count];
+    cy_future_t    futures[cfg.pub_count];
     for (size_t i = 0; i < cfg.pub_count; i++) {
         cy_err_t res = cy_advertise_c(cy, &publishers[i], cfg.pubs[i].name, 1024 * 1024);
         if (res != CY_OK) {
@@ -286,7 +286,7 @@ int main(const int argc, char* argv[])
     }
 
     // Create subscribers.
-    struct cy_subscriber_t subscribers[cfg.sub_count];
+    cy_subscriber_t subscribers[cfg.sub_count];
     for (size_t i = 0; i < cfg.sub_count; i++) {
         cy_err_t res = cy_subscribe_c(cy, &subscribers[i], cfg.subs[i].name, 1024 * 1024, on_msg_trace);
         if (res != CY_OK) {
