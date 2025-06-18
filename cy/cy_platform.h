@@ -117,7 +117,7 @@ struct cy_topic_t
     /// at least one collision anywhere on the network. The counter MUST NOT BE CHANGED without removing the topic
     /// from the subject-ID index tree!
     /// Remember that the subject-ID is (for non-pinned topics): (hash+evictions)%topic_count.
-    uint64_t evictions;
+    uint32_t evictions;
 
     /// Currently, the age is increased locally as follows:
     ///

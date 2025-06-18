@@ -53,6 +53,18 @@ static int_fast8_t log2_floor(const uint64_t x)
     return (int_fast8_t)((x == 0) ? -1 : (63 - __builtin_clzll(x)));
 }
 
+/// The inverse of log2_floor() with the same special case: exp=-1 returns 0.
+static uint64_t pow2(const int_fast8_t exp)
+{
+    if (exp < 0) {
+        return 0;
+    }
+    if (exp > 63) {
+        return UINT64_MAX;
+    }
+    return 1ULL << exp;
+}
+
 static uint64_t random_u64(const struct cy_t* const cy)
 {
     const uint64_t seed[2] = { cy->platform->prng(cy), cy->uid };
@@ -366,11 +378,10 @@ static bool is_pinned(const uint64_t hash)
 }
 
 /// This comparator is only applicable on subject-ID allocation conflicts. As such, hashes must be different.
-static bool left_wins(const struct cy_topic_t* const left, const uint64_t r_age, const uint64_t r_hash)
+static bool left_wins(const struct cy_topic_t* const left, const int_fast8_t r_lage, const uint64_t r_hash)
 {
     assert(left->hash != r_hash);
     const int_fast8_t l_lage = log2_floor(left->age);
-    const int_fast8_t r_lage = log2_floor(r_age);
     return (l_lage != r_lage) ? (l_lage > r_lage) : left->hash < r_hash; // older topic wins
 }
 
@@ -534,7 +545,7 @@ static uint64_t topic_hash(const struct wkv_str_t name)
     return hash;
 }
 
-static uint16_t topic_subject_id(const uint64_t hash, const uint64_t evictions)
+static uint16_t topic_subject_id(const uint64_t hash, const uint32_t evictions)
 {
     // TODO: remove this special case for pinned topics once we switched to the new extended subject-ID space.
     if (is_pinned(hash)) {
@@ -599,7 +610,7 @@ static void topic_ensure_subscribed(struct cy_t* const cy, struct cy_topic_t* co
 /// topic hash function, unless there is a large number of topics (~>1000).
 static void topic_allocate(struct cy_t* const       cy,
                            struct cy_topic_t* const topic,
-                           const uint64_t           new_evictions,
+                           const uint32_t           new_evictions,
                            const bool               virgin)
 {
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
@@ -651,7 +662,7 @@ static void topic_allocate(struct cy_t* const       cy,
         // Someone else is sitting on that subject-ID. We need to arbitrate.
         struct cy_topic_t* const other = CAVL2_TO_OWNER(t, struct cy_topic_t, index_subject_id);
         assert(topic->hash != other->hash); // This would mean that we inserted the same topic twice, impossible
-        if (left_wins(topic, other->age, other->hash)) {
+        if (left_wins(topic, log2_floor(other->age), other->hash)) {
             // This is our slot now! The other topic has to move.
             // This can trigger a chain reaction that in the worst case can leave no topic unturned.
             // One issue is that the worst-case recursive call depth equals the number of topics in the system.
@@ -708,7 +719,7 @@ static cy_err_t topic_new(struct cy_t* const        cy,
                           struct cy_topic_t** const out_topic,
                           const struct wkv_str_t    resolved_name,
                           const uint64_t            hash,
-                          const uint64_t            evictions)
+                          const uint32_t            evictions)
 {
     struct cy_topic_t* const topic = cy->platform->topic_new(cy);
     if (topic == NULL) {
@@ -877,7 +888,7 @@ static void* wkv_cb_couple_new_topic(const struct wkv_event_t evt)
 static struct cy_topic_t* topic_subscribe_if_matching(struct cy_t* const     cy,
                                                       const struct wkv_str_t resolved_name,
                                                       const uint64_t         hash,
-                                                      const uint64_t         evictions)
+                                                      const uint32_t         evictions)
 {
     assert((cy != NULL) && (resolved_name.str != NULL));
     if (resolved_name.len == 0) {
@@ -923,10 +934,10 @@ static void* wkv_cb_topic_scout_response(const struct wkv_event_t evt)
 //                                                      HEARTBEAT
 // =====================================================================================================================
 
-#define TOPIC_FLAG_PUBLISHING 1U ///< Source is actively publishing this topic.
-#define TOPIC_FLAG_SUBSCRIBED 2U ///< Source is subscribed to this topic.
-#define TOPIC_FLAG_RECEIVING  4U ///< At least one transfer was received on this topic since last gossip.
-#define TOPIC_FLAG_SCOUT      8U ///< Scout message requesting everyone who knows matching topics to respond.
+#define FLAG_PUBLISHING 1U ///< Source is actively publishing this topic.
+#define FLAG_SUBSCRIBED 2U ///< Source is subscribed to this topic.
+#define FLAG_RECEIVING  4U ///< At least one transfer was received on this topic since last gossip.
+#define FLAG_SCOUT      8U ///< Scout message requesting everyone who knows matching topics to respond.
 
 /// We could have used Nunavut, but we only need a single message and it's very simple, so we do it manually.
 struct heartbeat_t
@@ -937,8 +948,11 @@ struct heartbeat_t
     // The following fields are conditional on version=1.
     uint64_t uid;
     uint64_t topic_hash;
-    uint64_t topic_flags8_age56;
-    uint64_t topic_name_length8_reserved16_evictions40;
+    uint32_t topic_evictions;
+    uint8_t  _reserved_;    ///< May be used in the future to extend the evictions counter to 40 bits if needed.
+    int8_t   topic_log_age; ///< floor(log2(topic_age)), range [-1,63], where -1 represents floor(log2(0)).
+    uint8_t  flags;
+    uint8_t  topic_name_len;
     char     topic_name[CY_TOPIC_NAME_MAX + 1];
 };
 
@@ -950,13 +964,12 @@ static cy_err_t publish_heartbeat(struct cy_t* const cy, const cy_us_t now, stru
     }
 
     // Fill and serialize the message.
-    message->uptime  = (uint32_t)((now - cy->ts_started) / MEGA);
-    message->version = 1;
-    message->uid     = cy->uid;
-    const size_t message_size =
-      offsetof(struct heartbeat_t, topic_name) + (message->topic_name_length8_reserved16_evictions40 >> 56U);
+    message->uptime           = (uint32_t)((now - cy->ts_started) / MEGA);
+    message->version          = 1;
+    message->uid              = cy->uid;
+    const size_t message_size = offsetof(struct heartbeat_t, topic_name) + message->topic_name_len;
     assert(message_size <= sizeof(struct heartbeat_t));
-    assert((message->topic_name_length8_reserved16_evictions40 >> 56U) <= CY_TOPIC_NAME_MAX);
+    assert(message->topic_name_len <= CY_TOPIC_NAME_MAX);
     const struct cy_buffer_borrowed_t payload = { .next = NULL, .view = { .data = message, .size = message_size } };
 
     // Publish the message.
@@ -975,16 +988,17 @@ static cy_err_t publish_heartbeat_gossip(struct cy_t* const cy, struct cy_topic_
 {
     topic_age(topic, now);
     topic_ensure_subscribed(cy, topic); // use this opportunity to repair the subscription if broken
-    const uint_fast8_t flags = ((topic->pub_count > 0) ? TOPIC_FLAG_PUBLISHING : 0U) |     //
-                               ((topic->couplings != NULL) ? TOPIC_FLAG_SUBSCRIBED : 0U) | //
-                               ((topic->ts_received >= topic->ts_gossiped) ? TOPIC_FLAG_RECEIVING : 0U);
+    const uint_fast8_t flags = ((topic->pub_count > 0) ? FLAG_PUBLISHING : 0U) |     //
+                               ((topic->couplings != NULL) ? FLAG_SUBSCRIBED : 0U) | //
+                               ((topic->ts_received >= topic->ts_gossiped) ? FLAG_RECEIVING : 0U);
     // Possible optimization: we don't have to transmit the topic name if the message is urgent, i.e.,
     // if it is published in response to a divergent allocation or possibly a collision.
-    struct heartbeat_t msg = {
-        .topic_hash                                = topic->hash,
-        .topic_flags8_age56                        = (((uint64_t)flags) << 56U) | topic->age,
-        .topic_name_length8_reserved16_evictions40 = (((uint64_t)topic->index_name->key_len) << 56U) | topic->evictions,
-    };
+    struct heartbeat_t msg = { .topic_hash      = topic->hash,
+                               .topic_evictions = topic->evictions,
+                               ._reserved_      = 0,
+                               .topic_log_age   = log2_floor(topic->age),
+                               .flags           = flags,
+                               .topic_name_len  = (uint_fast8_t)topic->index_name->key_len };
     memcpy(msg.topic_name, topic->name, topic->index_name->key_len);
     if (topic->gossip_priority > 0) {
         CY_TRACE(cy,
@@ -1003,12 +1017,10 @@ static cy_err_t publish_heartbeat_gossip(struct cy_t* const cy, struct cy_topic_
 static cy_err_t publish_heartbeat_scout(struct cy_t* const cy, const cy_us_t now)
 {
     const struct cy_subscriber_root_t* subr = cy->next_scout;
-    assert(subr != NULL);
-    struct heartbeat_t msg = {
-        .topic_hash         = 8185, // https://github.com/pavel-kirienko/cy/issues/12#issuecomment-2953184238
-        .topic_flags8_age56 = (((uint64_t)TOPIC_FLAG_SCOUT) << 56U),
-        .topic_name_length8_reserved16_evictions40 = (((uint64_t)subr->index_name->key_len) << 56U),
-    };
+    assert(subr != NULL); // https://github.com/pavel-kirienko/cy/issues/12#issuecomment-2953184238
+    struct heartbeat_t msg = { .topic_hash     = 8185,
+                               .flags          = FLAG_SCOUT,
+                               .topic_name_len = (uint_fast8_t)subr->index_name->key_len };
     wkv_get_key(&cy->subscribers_by_name, subr->index_name, msg.topic_name);
     const cy_err_t res = publish_heartbeat(cy, now, &msg);
     CY_TRACE(cy, "📢'%s' result=%d", msg.topic_name, res);
@@ -1029,20 +1041,18 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
     if ((msg_size < offsetof(struct heartbeat_t, topic_name)) || (heartbeat.version != 1)) {
         return;
     }
-    const cy_us_t                        ts         = evt->transfer->timestamp;
-    const struct cy_transfer_metadata_t* meta       = &evt->transfer->metadata;
-    const uint64_t                       other_hash = heartbeat.topic_hash;
-    const uint64_t         other_evictions = heartbeat.topic_name_length8_reserved16_evictions40 & ((1ULL << 40U) - 1U);
-    const uint64_t         other_age       = heartbeat.topic_flags8_age56 & ((1ULL << 56U) - 1U);
-    const uint_fast8_t     flags           = (uint_fast8_t)(heartbeat.topic_flags8_age56 >> 56U);
-    const bool             is_scout        = (flags & TOPIC_FLAG_SCOUT) != 0U;
-    const struct wkv_str_t key             = { .len = heartbeat.topic_name_length8_reserved16_evictions40 >> 56U,
-                                               .str = heartbeat.topic_name };
+    const cy_us_t                        ts              = evt->transfer->timestamp;
+    const struct cy_transfer_metadata_t* meta            = &evt->transfer->metadata;
+    const uint64_t                       other_hash      = heartbeat.topic_hash;
+    const uint32_t                       other_evictions = heartbeat.topic_evictions;
+    const int_fast8_t                    other_lage      = heartbeat.topic_log_age;
+    const bool                           is_scout        = (heartbeat.flags & FLAG_SCOUT) != 0U;
+    const struct wkv_str_t               key = { .len = heartbeat.topic_name_len, .str = heartbeat.topic_name };
     //
     if (!is_scout) {
         // Find the topic in our local database.
         struct cy_topic_t* mine = cy_topic_find_by_hash(cy, other_hash);
-        if ((flags & (TOPIC_FLAG_PUBLISHING | TOPIC_FLAG_RECEIVING)) != 0) {
+        if ((heartbeat.flags & (FLAG_PUBLISHING | FLAG_RECEIVING)) != 0) {
             if (mine == NULL) {
                 mine = topic_subscribe_if_matching(cy, key, other_hash, other_evictions);
             }
@@ -1053,13 +1063,12 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
         }
         if (mine != NULL) { // We have this topic! Check if we have consensus on the subject-ID.
             assert(mine->hash == other_hash);
-            const int_fast8_t mine_lage  = log2_floor(mine->age);
-            const int_fast8_t other_lage = log2_floor(other_age);
+            const int_fast8_t mine_lage = log2_floor(mine->age);
             if (mine->evictions != other_evictions) {
                 CY_TRACE(cy,
                          "🔀 Divergence on '%s' #%016llx discovered via gossip from uid=%016llx nid=%04x:\n"
                          "\t local  @%04x evict=%llu log2(age=%llu)=%+d\n"
-                         "\t remote @%04x evict=%llu log2(age=%llu)=%+d",
+                         "\t remote @%04x evict=%llu log2(age)=%+d",
                          mine->name,
                          (unsigned long long)mine->hash,
                          (unsigned long long)heartbeat.uid,
@@ -1070,7 +1079,6 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
                          mine_lage,
                          topic_subject_id(other_hash, other_evictions),
                          (unsigned long long)other_evictions,
-                         (unsigned long long)other_age,
                          other_lage);
                 assert(mine->evictions != other_evictions);
                 if ((mine_lage > other_lage) || ((mine_lage == other_lage) && (mine->evictions > other_evictions))) {
@@ -1083,7 +1091,7 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
                     CY_TRACE(cy,
                              "We lost, reallocating the topic to try and match the remote, or offer new alternative.");
                     const cy_us_t old_gossiped = mine->ts_gossiped;
-                    mine->age                  = max_u64(mine->age, other_age);
+                    mine->age                  = max_u64(mine->age, pow2(other_lage));
                     topic_allocate(cy, mine, other_evictions, false);
                     if (mine->evictions == other_evictions) { // perfect sync, no need to gossip
                         update_gossip_order(cy, mine, old_gossiped, 0);
@@ -1094,18 +1102,18 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
             } else {
                 topic_ensure_subscribed(cy, mine); // use this opportunity to repair the subscription if broken
             }
-            mine->age = max_u64(mine->age, other_age);
+            mine->age = max_u64(mine->age, pow2(other_lage));
         } else { // We don't know this topic; check for a subject-ID collision and do auto-subscription.
             mine = cy_topic_find_by_subject_id(cy, topic_subject_id(other_hash, other_evictions));
             if (mine == NULL) {
                 return; // We are not using this subject-ID, no collision.
             }
             assert(cy_topic_subject_id(mine) == topic_subject_id(other_hash, other_evictions));
-            const bool win = left_wins(mine, other_age, other_hash);
+            const bool win = left_wins(mine, other_lage, other_hash);
             CY_TRACE(cy,
                      "💥 Collision @%04x discovered via gossip from uid=%016llx nid=%04x; we %s. Contestants:\n"
                      "\t local  #%016llx evict=%llu log2(age=%llu)=%+d '%s'\n"
-                     "\t remote #%016llx evict=%llu log2(age=%llu)=%+d '%s'",
+                     "\t remote #%016llx evict=%llu log2(age)=%+d '%s'",
                      cy_topic_subject_id(mine),
                      (unsigned long long)heartbeat.uid,
                      meta->remote_node_id,
@@ -1117,8 +1125,7 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
                      mine->name,
                      (unsigned long long)other_hash,
                      (unsigned long long)other_evictions,
-                     (unsigned long long)other_age,
-                     log2_floor(other_age),
+                     other_lage,
                      heartbeat.topic_name);
             // We don't need to do anything if we won, but we need to announce to the network (in particular to the
             // infringing node) that we are using this subject-ID, so that the loser knows that it has to move.
@@ -1136,13 +1143,13 @@ static void on_heartbeat(struct cy_t* const cy, const struct cy_arrival_t* const
     } else {
         // A scout message is simply asking us to check if we have any matching topics, and gossip them ASAP if so.
         CY_TRACE(cy,
-                 "📢 Scout from uid=%016llx nid=%04x: query='%s' hash=%016llx evict=%llu age=%llu",
+                 "📢 Scout from uid=%016llx nid=%04x: query='%s' hash=%016llx evict=%llu log2(age)=%d",
                  (unsigned long long)heartbeat.uid,
                  meta->remote_node_id,
                  heartbeat.topic_name,
                  (unsigned long long)other_hash,
                  (unsigned long long)other_evictions,
-                 (unsigned long long)other_age);
+                 other_lage);
         (void)wkv_match(&cy->topics_by_name, key, cy, wkv_cb_topic_scout_response);
     }
 }
