@@ -47,15 +47,10 @@ extern "C"
 {
 #endif
 
-/// When a response to a received message is sent, it is delivered as an RPC request (sic) transfer to this service-ID.
+/// When a response to a received message is sent, it is delivered as a P2P transfer to this service-ID.
 /// The response user data is prefixed with 8 bytes of the full topic hash to which we are responding.
 /// The receiver of the response will be able to match the response with a specific request using the transfer-ID.
-///
-/// We are using RPC request transfers to deliver responses because in the future we may want to use the unused
-/// response transfer as a confirmation for reliable transport.
-///
-/// TODO: use RPC response transfers instead.
-#define CY_RPC_SERVICE_ID_TOPIC_RESPONSE 510
+#define CY_P2P_SERVICE_ID_TOPIC_RESPONSE 510
 
 /// This is the base type that is extended by the platform layer with transport- and platform-specific entities,
 /// such as socket handles, etc. Instantiation is therefore done inside the platform layer in the heap or some
@@ -227,12 +222,12 @@ typedef void (*cy_platform_node_id_clear_t)(struct cy_t*);
 /// Every invocation returns a mutable borrowed reference to the filter, which outlives the Cy instance.
 typedef struct cy_bloom64_t* (*cy_platform_node_id_bloom_t)(struct cy_t*);
 
-/// Instructs the underlying transport layer to send an RPC request transfer.
-typedef cy_err_t (*cy_platform_request_t)(struct cy_t*,
-                                          uint16_t                            service_id,
-                                          const struct cy_transfer_metadata_t metadata,
-                                          cy_us_t                             tx_deadline,
-                                          struct cy_buffer_borrowed_t         payload);
+/// Instructs the underlying transport layer to send a peer-to-peer transfer.
+typedef cy_err_t (*cy_platform_p2p_t)(struct cy_t*,
+                                      uint16_t                            service_id,
+                                      const struct cy_transfer_metadata_t metadata,
+                                      cy_us_t                             tx_deadline,
+                                      struct cy_buffer_borrowed_t         payload);
 
 /// Allocates a new topic. NULL if out of memory.
 typedef struct cy_topic_t* (*cy_platform_topic_new_t)(struct cy_t*);
@@ -286,7 +281,7 @@ struct cy_platform_t
     cy_platform_node_id_clear_t node_id_clear;
     cy_platform_node_id_bloom_t node_id_bloom;
 
-    cy_platform_request_t request;
+    cy_platform_p2p_t p2p;
 
     cy_platform_topic_new_t                   topic_new;
     cy_platform_topic_destroy_t               topic_destroy;
@@ -452,14 +447,12 @@ void cy_ingest_topic_transfer(struct cy_t* const         cy,
                               struct cy_topic_t* const   topic,
                               struct cy_transfer_owned_t transfer);
 
-/// Cy does not manage RPC endpoints explicitly; it is the responsibility of the transport-specific glue logic.
-/// Currently, the following RPC endpoints must be implemented in the glue logic:
+/// Cy does not manage P2P endpoints explicitly; it is the responsibility of the transport-specific glue logic.
+/// Currently, the following P2P endpoints must be implemented in the glue logic:
 ///
-///     - CY_RPC_SERVICE_ID_TOPIC_RESPONSE request (sic!) handler.
+///     - CY_P2P_SERVICE_ID_TOPIC_RESPONSE handler.
 ///       Delivers the optional response to a message published on a topic.
 ///       The first 8 bytes of the transfer payload are the topic hash to which the response is sent.
-///       Note that we send a topic response as an RPC request transfer; the reasoning is that a higher-level
-///       response is carried by a lower-level request transfer.
 void cy_ingest_topic_response_transfer(struct cy_t* const cy, struct cy_transfer_owned_t transfer);
 
 /// For diagnostics and logging only. Do not use in embedded and real-time applications.

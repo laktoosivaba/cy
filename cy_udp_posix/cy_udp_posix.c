@@ -99,7 +99,7 @@ static void rpc_listen(struct cy_udp_posix_t* const cy_udp)
     assert(cy_udp->base.node_id <= UDPARD_NODE_ID_MAX);
     const int_fast8_t res = udpardRxRPCDispatcherListen(&cy_udp->rpc_rx_dispatcher,
                                                         &cy_udp->rpc_rx_port_topic_response,
-                                                        CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
+                                                        CY_P2P_SERVICE_ID_TOPIC_RESPONSE,
                                                         true,
                                                         cy_udp->response_extent_with_overhead);
     assert(res >= 0); // infallible by design!
@@ -115,7 +115,7 @@ static void rpc_listen(struct cy_udp_posix_t* const cy_udp)
 static void rpc_unlisten(struct cy_udp_posix_t* const cy_udp)
 {
     const int_fast8_t res =
-      udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_RPC_SERVICE_ID_TOPIC_RESPONSE, true);
+      udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_P2P_SERVICE_ID_TOPIC_RESPONSE, true);
     assert(res >= 0); // infallible by design
 }
 
@@ -260,11 +260,11 @@ static struct cy_bloom64_t* platform_node_id_bloom(struct cy_t* const cy)
     return &cy_udp->node_id_bloom;
 }
 
-static cy_err_t platform_request(struct cy_t* const                  cy,
-                                 const uint16_t                      service_id,
-                                 const struct cy_transfer_metadata_t metadata,
-                                 const cy_us_t                       tx_deadline,
-                                 const struct cy_buffer_borrowed_t   payload)
+static cy_err_t platform_p2p(struct cy_t* const                  cy,
+                             const uint16_t                      service_id,
+                             const struct cy_transfer_metadata_t metadata,
+                             const cy_us_t                       tx_deadline,
+                             const struct cy_buffer_borrowed_t   payload)
 {
     CY_BUFFER_GATHER_ON_STACK(linear_payload, payload);
     struct cy_udp_posix_t* const cy_udp = (struct cy_udp_posix_t*)cy;
@@ -427,7 +427,7 @@ static const struct cy_platform_t g_platform = {
     .node_id_clear = platform_node_id_clear,
     .node_id_bloom = platform_node_id_bloom,
 
-    .request = platform_request,
+    .p2p = platform_p2p,
 
     .topic_new                   = platform_topic_new,
     .topic_destroy               = platform_topic_destroy,
@@ -613,7 +613,7 @@ static void ingest_rpc_frame(struct cy_udp_posix_t* const      cy_udp,
     if (er == 1) {
         assert(port != NULL);
         if (port == &cy_udp->rpc_rx_port_topic_response) {
-            assert(port->service_id == CY_RPC_SERVICE_ID_TOPIC_RESPONSE);
+            assert(port->service_id == CY_P2P_SERVICE_ID_TOPIC_RESPONSE);
             const struct cy_transfer_owned_t tr = { .timestamp = (cy_us_t)transfer.base.timestamp_usec,
                                                     .metadata  = make_metadata(&transfer.base),
                                                     .payload   = make_rx_buffer(transfer.base.payload) };

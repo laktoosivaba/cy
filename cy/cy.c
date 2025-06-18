@@ -1447,15 +1447,15 @@ cy_err_t cy_respond(struct cy_t* const                  cy,
         return res;
     }
     /// Yes, we send the response using a request transfer. In the future we may leverage this for reliable delivery.
-    /// All responses are sent to the same RPC service-ID; they are discriminated by the topic hash.
-    return cy->platform->request(cy,
-                                 CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
-                                 metadata,
-                                 tx_deadline,
-                                 (struct cy_buffer_borrowed_t){
-                                   .next = &payload,
-                                   .view = { .size = RESPONSE_PAYLOAD_OVERHEAD_BYTES, .data = &topic->hash },
-                                 });
+    /// All responses are sent to the same P2P service-ID; they are discriminated by the topic hash.
+    return cy->platform->p2p(cy,
+                             CY_P2P_SERVICE_ID_TOPIC_RESPONSE,
+                             metadata,
+                             tx_deadline,
+                             (struct cy_buffer_borrowed_t){
+                               .next = &payload,
+                               .view = { .size = RESPONSE_PAYLOAD_OVERHEAD_BYTES, .data = &topic->hash },
+                             });
 }
 
 void cy_subscriber_name(const struct cy_t* const cy, const struct cy_subscriber_t* const sub, char* const out_name)
@@ -1623,7 +1623,7 @@ cy_err_t cy_new(struct cy_t* const                cy,
     assert(platform->node_id_set != NULL);
     assert(platform->node_id_clear != NULL);
     assert(platform->node_id_bloom != NULL);
-    assert(platform->request != NULL);
+    assert(platform->p2p != NULL);
     assert(platform->topic_new != NULL);
     assert(platform->topic_destroy != NULL);
     assert(platform->topic_publish != NULL);

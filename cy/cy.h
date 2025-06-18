@@ -388,8 +388,7 @@ void cy_unsubscribe(struct cy_t* const cy, struct cy_subscriber_t* const sub);
 /// This can be invoked either from a subscription callback or at any later point. The topic may even get reallocated
 /// in the process but it doesn't matter.
 ///
-/// The response is be sent using an RPC request (sic) transfer to the publisher with the specified priority and
-/// the original transfer-ID.
+/// The response is sent using a P2P transfer to the publisher with the specified priority and the original transfer-ID.
 cy_err_t cy_respond(struct cy_t* const                  cy,
                     struct cy_topic_t* const            topic,
                     const cy_us_t                       tx_deadline,
