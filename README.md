@@ -25,7 +25,7 @@ Stretch goals:
 ```c
 // SET UP LOCAL NODE.
 // The initial configuration is platform- and transport-specific, unlike the rest of the API.
-struct cy_udp_posix_t cy_udp_posix; // In this example we're running over Cyphal/UDP, this node runs on POSIX.
+cy_udp_posix_t cy_udp_posix; // In this example we're running over Cyphal/UDP, this node runs on POSIX.
 cy_err_t res = cy_udp_posix_new(&cy_udp_posix,
                                 local_unique_id,  // 64-bit composed of VID+PID+IID
                                 "my_namespace",   // topic name prefix (defaults to the local node UID if empty)
@@ -34,7 +34,7 @@ cy_err_t res = cy_udp_posix_new(&cy_udp_posix,
 if (res != CY_OK) { ... }
 
 // The rest of the API is platform- and transport-agnostic, except the event loop spinners.
-struct cy_t* const cy = &cy_udp_posix.base;
+cy_t* const cy = &cy_udp_posix.base;
 
 // CREATE PUBLISHERS.
 // To interface with an old node that does not support named topics, put the subject-ID into the name after @;
@@ -43,7 +43,7 @@ struct cy_t* const cy = &cy_udp_posix.base;
 // If no responses are needed or expected, set it to zero.
 // The "_c" suffix at the end of some functions indicates that the function accepts an ordinary C-string
 // instead of wkv_str_t that is used internally throughout.
-struct cy_publisher_t my_publisher;
+cy_publisher_t my_publisher;
 res = cy_advertise_c(cy, &my_publisher, "my_topic", 0);
 if (res != CY_OK) { ... }
 
@@ -51,7 +51,7 @@ if (res != CY_OK) { ... }
 // Subscribers can specify a verbatim topic name or a pattern. Pattern subscribers will actively discover
 // topics on the network whose names match the pattern, and automatically subscribe to them in the background.
 // There may be multiple local subscribers on the same topic.
-struct cy_subscriber_t verbatim_subscription;
+cy_subscriber_t verbatim_subscription;
 res = cy_subscribe_c(cy,
                      &verbatim_subscription,
                      "/other_namespace/my_topic",
@@ -62,7 +62,7 @@ if (res != CY_OK) { ... }
 // Multiple patterns may match the same topic. For example, "/?/def" and "/abc/*" both match "/abc/def".
 // The library does reference counting and routing internally so that each subscriber gets the relevant data
 // and topics remain alive as long as at least one subscriber (or publisher) is using it.
-struct cy_subscriber_t pattern_subscription;
+cy_subscriber_t pattern_subscription;
 res = cy_subscribe_c(cy,
                      &pattern_subscription,
                      "/?/my_topic",                 // Will match any segment in place of '?'
@@ -87,7 +87,7 @@ while (true) {
     if (cy_joined(cy)) {
         char msg[256];
         sprintf(msg, "I am %016llx. time=%lld us", (unsigned long long)cy->uid, (long long)now);
-        const struct cy_buffer_borrowed_t payload = { .view.data = msg, .view.size = strlen(msg) };
+        const cy_buffer_borrowed_t payload = { .view.data = msg, .view.size = strlen(msg) };
         const cy_err_t pub_res = cy_udp_publish1(cy, &my_publisher, now + 100000, payload);
         if (pub_res != CY_OK) { ... }
     }
