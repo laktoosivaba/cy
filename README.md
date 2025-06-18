@@ -37,8 +37,8 @@ if (res != CY_OK) { ... }
 struct cy_t* const cy = &cy_udp_posix.base;
 
 // CREATE PUBLISHERS.
-// To interface with an old node that does not support named topics, put the subject-ID into the topic name;
-// e.g., `/1234`. This will bypass the automatic subject-ID allocation and pin the topic as specified.
+// To interface with an old node that does not support named topics, put the subject-ID into the name after @;
+// e.g., `/@/1234`. This will bypass the automatic subject-ID allocation and pin the topic as specified.
 // The last argument is the extent of response messages sent back from the remote subscribers.
 // If no responses are needed or expected, set it to zero.
 // The "_c" suffix at the end of some functions indicates that the function accepts an ordinary C-string
@@ -122,7 +122,7 @@ In the spirit of RFC 4429, I call this solution *Pessimistic DAD*, because each 
 
 A kind of CRDT is used to build distributed consensus between nodes on how to allocate subject-IDs to topics. Each node is only aware of its own topics; nobody keeps the full set. Any node can offer a new allocation; at any time during or after the offering, another node may object, in which case arbitration is performed, and the loser is evicted from the current subject-ID assignment and has to offer a new allocation. If a divergent allocation is discovered (same topic maps to different subject-IDs), another arbitration is performed to detect which allocation needs to be repaired. Allocations that have been around longer OR those that are being used more often aways win arbitration, which ensures that a newcomer cannot override existing network configuration; thus, existing topics and nodes are not affected when new nodes or topics join the network.
 
-For the purposes of the subject-ID allocation CRDT, the topic name is replaced with its *topic hash*. Ordinarily it is simply a 64-bit Rapidhash of the name. A special case applies if the topic has to be compatible with old Cyphal nodes that do not support named topics, and thus it has to be *pinned* to a specific subject-ID: the name of a pinned topic is simply its decimal subject-ID prefixed with a `/`, and the hash of a pinned topic equals its subject-ID.
+For the purposes of the subject-ID allocation CRDT, the topic name is replaced with its *topic hash*. Ordinarily it is simply a 64-bit Rapidhash of the name. A special case applies if the topic has to be compatible with old Cyphal nodes that do not support named topics, and thus it has to be *pinned* to a specific subject-ID: the name of a pinned topic is simply its decimal subject-ID prefixed with a `/@/`, and the hash of a pinned topic equals its subject-ID.
 
 For a non-pinned topic, the subject-ID allocated to it equals `(hash+evictions)%6144`, where evictions is the number of times the topic had to be moved due to losing arbitration to a contender for the same subject-ID. As can be seen, dynamically assigned subject-IDs fall in the range [0,6144); the remaining range [6144, 8192) is reserved for pinned topics and fixed subject-IDs. It is possible to pin a topic at any subject-ID, not necessarily in the reserved range, but in the presence of nodes that do not support the named topic protocol pinning below 6144 is not recommended because old nodes will be unable to participate in conflict resolution.
 
@@ -140,7 +140,7 @@ CRDTs only guarantee convergence when the system has been quiescent for a while,
 
 Some networks will not tolerate the initial configuration stage while the protocol is working toward consensus, as this delay may be several seconds long in larger networks. To avoid this, nodes should ideally store the last stable subject-ID assignments in the non-volatile memory, such that they are able to resume normal operation immediately at next power-on without the need to wait for the network to converge again. Shall that configuration become obsolete (e.g., firmware update changes network configuration in other nodes), no issues are expected because the protocol will address divergences and collisions using its normal algorithm.
 
-The protocol itself does not put any constraints on the topic name syntax. For the protocol, a topic name is just an arbitrary byte string, with one exception made for pinned topics for reasons of backward compatibility: `/[1-9][0-9]{0,4}`.
+The protocol itself does not put any constraints on the topic name syntax. For the protocol, a topic name is just an arbitrary byte string, with one exception made for pinned topics for reasons of backward compatibility: `@/[1-9][0-9]{0,4}`.
 
 ### Heartbeat extension
 
@@ -190,9 +190,9 @@ More or less in line with existing conventions, the API should offer at least:
 
 - Fully specified topic names starting with a name separator: `/topic/name`
 
-- Namespace-prefixed topic names if the leading symbol is not a separator: `topic/name` expands into `/namespace/topic/name`, where the `/namespace` is set on the node instance during its initialization.
+- Namespace-prefixed topic names if the leading symbol is not a separator: `topic/name` expands into `namespace/topic/name`, where the `namespace` is set on the node instance during its initialization.
 
-- Topics starting with `~` are prefixed with the node name, which itself is derived from UID by default: `~/topic/name` expands into `/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01, unless the local name is overridden.
+- Topics starting with `~` are prefixed with the node name, which itself is derived from UID by default: `~/topic/name` expands into `@/abcd/1234/5678ef01/topic/name`, where the UID is 0xabcd12345678ef01, specifically VID=0xabcd PID=0x1234 IID=5678ef01, unless the local name is overridden.
 
 Ideally we should also introduce remappings that locally map a given topic name prefix to another prefix.
 
