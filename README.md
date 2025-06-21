@@ -1,6 +1,6 @@
-# Experimental zero-configuration decentralized Cyphal with named topics
+# Experimental zero-configuration decentralized Cyphal with named topics 🛠️🏗️🧪
 
-A minimalist Cyphal extension adding named topics that are automatically allocated in the subject-ID space without a central coordinator. A simple decentralized node-ID autoconfiguration protocol is added as well.
+A Cyphal v1.1 PoC adding named topics that are automatically allocated in the subject-ID space without a central coordinator. A simple decentralized node-ID autoconfiguration protocol is added as well.
 
 The basic requirements are as follows:
 
@@ -223,7 +223,7 @@ If the consensus algorithm later finds a different mapping (e.g., an older topic
 
 #### When a message is received
 
-Incement the age counter of the current topic.
+Increment the age counter of the current topic.
 
 ### When a new heartbeat is published
 
@@ -267,7 +267,7 @@ Regardless of the above steps, merge the local age as max(local age, remote age)
 
 ## Compatibility with old nodes
 
-From an integrator standpoint, the only difference is that topics are now assigned not via registers as numbers, but as topic name remappings as strings: `uavcan.pub.my_subject.id=1234` is now a remapping from `my_subject` to `/1234`.
+From an integrator standpoint, the only difference is that topics are now assigned not via registers as numbers, but as topic name remappings as strings: `uavcan.pub.my_subject.id=1234` is now a remapping from `my_subject` to `@/1234`.
 
 
 ## Implementation notes
@@ -303,16 +303,6 @@ direction LR
 
 ## Missing features
 
-### Retirement of automatically created topics with no publishers
-
-Pattern subscribers (e.g., `/?/foo/*`) will automatically create new topics in the background when gossips matching the pattern are received. This will create issues with small nodes if the network sees some topic churn, because it will leave local tombstones taking up memory (computationally they are basically ~free).
-
-The solution is simple: maintain a new topic index that only contains topics *without local publishers* that are *coupled only with pattern subscribers* ordered by *last extrinsic activity*. Extrinsic activity is the reception of a heartbeat gossiping that topic, or receiving a transfer on that topic. Updating the index on every received transfer might be computationally expensive if it's an AVL tree; perhaps it could be replaced with a doubly-linked list, where on each update the topic is simply moved to the end, which is a constant-complexity operation; the oldest topic will be kept in the beginning of the list.
-
-The automatic retirement timeout should be set to a value greater than the topic scalability limit (say 1000 topics) times maximum heartbeat period (let's say 0.5 seconds), so ~10 minutes. There should be API to override this value.
-
-Alternatively, the user could specify the maximum number of automatic subscriptions, so that when the number is exceeded, the library will retire the oldest topic. This may cause subscription churn if not used carefully though.
-
 ### Type assignability checking
 
 There is currently no robust solution on the horizon, but one tentative solution is to suffix the topic name with the type name. For example, if we have `zubax.fluxgrip.Feedback.1.0`, the topic could be named `/magnet/rear/status.fb1`, where `.fb1` hints at the type name and version.
@@ -330,36 +320,20 @@ There are at least three ways to implement it:
 
 ## Changes to the transport libraries: libudpard, libcanard, libserard, etc.
 
-### Pessimistic DAD fully managed by the transport libraries
+### Report node-ID collisions to support pessimistic DAD
 
-Implement the pessimistic duplicate address detection (DAD) method as the new node-ID assignment policy, while still allowing fully manual assignments for the benefit of applications that require full control over the transport.
+A simple API feature to inform the glue layer when to invoke `cy_notify_node_id_collision`.
 
-The Pessimistic DAD requires a long-sequence PRNG, which can be as simple as the standard SplitMix64 or Rapidhash seeded with the node's 64-bit UID. In addition, a large Bloom filter is needed: 8~16 bytes for Cyphal/CAN, 512~1024 bytes for the other transports.
+### New frame headers
 
-The transport libraries will be fully responsible for managing the node-ID, unless it is assigned manually. Even in the case of manual assignment, the collision monitoring will be done continuously for safety reasons; shall a collision be discovered, the current node-ID will be abandoned regardless of whether it's assigned manually or automatically.
+See <https://github.com/OpenCyphal/specification/issues/143>.
 
-The application will need to be notified when the local node-ID is changed to perform some transport-specific migration activities:
-- Cyphal/UDP: rebind the RPC RX socket to the new mcast endpoint.
-- Cyphal/CAN: update the acceptance filter for RPC frames.
+It is yet unclear if Cyphal/CAN also needs a new frame header.
 
-The overall cost of the Pessimistic DAD is about 100~200 extra lines of code per transport library.
+### Extend each transfer with the topic hash
 
-### Extensions to support stochastic MOM
+Cyphal/UDP and Cyphal/serial will carry the topic hash [directly in the frame header](https://github.com/OpenCyphal/specification/issues/143).
 
-Stochastic multiple occupant monitoring (MOM) mixes at most 48 of the most significant bits of the topic hash into the transfer such that only transfers that carry the expected topic hash can be correctly received. This prevents data misinterpretation during the topic allocation phase, when multiple topics may briefly occupy the same subject-ID until the new conflict-free consensus is found by the network. How the topic hash is leveraged depends on the specific transport.
+Cyphal/CAN will need a different approach; perhaps we could either seed the transfer CRC with some 16 bits of the topic hash, or add a part of the hash into the payload immediately before the CRC.
 
 When the transport detects a topic hash mismatch, it has the option to notify the CRDT protocol so that it can assign a higher priority to the topic where the conflict is found. It is not essential because even if no such notification is delivered, CRDT will eventually reach a conflict-free consensus, but the time required may be longer.
-
-#### Cyphal/UDP and Cyphal/serial
-
-The 16-bit user data field of the frame header will contain some of the 16 bits of the topic hash. Other 32 bits will be inverted and the result will be used to seed the transfer-CRC; the current initial value of the transfer-CRC is 0xFFFFFFFF, meaning that pinned topics (whose hash is zero) will remain compatible with the old non-named topics. The three leftover bits could be discarded or used to populate a new small field of the header.
-
-This results in a robust hash (6144 subject-IDs times 2^16 in the user word times 2^32 in the transfer CRC seed, also the optional three leftover bits could be added) that is expected to scale to very large networks even with multiple thousands of topics.
-
-#### Cyphal/CAN
-
-The CAN ID format only offers two bits for the topic hash: 21 and 22. Other 16 bits will be used to seed the 16-bit transfer-CRC (the default initial value of CRC-16-CCITT-FALSE is already zero). This excludes single-frame CAN transfers, though.
-
-The collision detection capability of this scheme is poor as we only introduce 18 bits of hash, which means that named-topic networks based on CAN will not scale to large numbers of topics. Together with 6144 possible subject-ID values, the probability of an undetected hash collision given 40 topics (optimistically assuming perfect hashing, which is not accurate) is 4.8e-7, or one in two million. The actual probability is higher considering the limitations of CRC algorithms when used for hashing. Usage of this mechanism in larger CAN networks (more than about thirty-forty topics) is unsafe and requires changes to the CAN frame format.
-
-The above only applies to multi-frame transfers over CAN, since single-frame Cyphal/CAN transfers do not include the payload CRC, unlike the other transports. One quick and dirty solution to enable collision-safe named topics on CAN networks without nontrivial changes to the Cyphal/CAN layer is to pad the payload with zeroes such that it is at least 1 byte larger than the MTU (i.e., at least 8 bytes in Classic CAN networks, at least 64 bytes in CAN FD networks). Such zero padding is guaranteed to not alter the interpretation of the payload due to the implicit zero extension/truncation rules. This **does not affect pinned topics** since they are conflict-free by design; they can still remain unpadded and thus efficient.
