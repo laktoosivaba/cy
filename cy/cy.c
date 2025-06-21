@@ -1772,16 +1772,16 @@ void cy_ingest_topic_transfer(cy_t* const cy, cy_topic_t* const topic, cy_transf
     // The callback may unsubscribe, so we have to store the next pointer early.
     const cy_topic_coupling_t* cpl = topic->couplings;
     while (cpl != NULL) {
-        cy_subscriber_t* sub = cpl->root->head;
-        assert(sub != NULL);
         const cy_topic_coupling_t* const next_cpl = cpl->next;
-        cy_subscriber_t* const           next_sub = sub->next;
+        cy_subscriber_t*                 sub      = cpl->root->head;
+        assert(sub != NULL);
         while (sub != NULL) {
-            const cy_arrival_t evt = { .subscriber         = sub,
-                                       .topic              = topic,
-                                       .transfer           = &transfer,
-                                       .substitution_count = cpl->substitution_count,
-                                       .substitutions      = cpl->substitutions };
+            cy_subscriber_t* const next_sub = sub->next;
+            const cy_arrival_t     evt      = { .subscriber         = sub,
+                                                .topic              = topic,
+                                                .transfer           = &transfer,
+                                                .substitution_count = cpl->substitution_count,
+                                                .substitutions      = cpl->substitutions };
             sub->callback(cy, &evt);
             sub = next_sub;
         }
