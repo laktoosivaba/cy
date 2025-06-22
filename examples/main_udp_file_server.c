@@ -65,7 +65,8 @@ void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
 
     // Send the response.
     CY_TRACE(cy,
-             "Responding to file read request: %s, offset %llu, size %u, error %u",
+             "Responding to file read request [tid=%016llx]: %s, offset %llu, size %u, error %u",
+             (unsigned long long)arv->transfer->metadata.transfer_id,
              file_name,
              (unsigned long long)read_offset,
              response.data_len,

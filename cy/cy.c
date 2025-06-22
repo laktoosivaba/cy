@@ -38,7 +38,7 @@
 #define IMPLICIT_TOPIC_DEFAULT_TIMEOUT_us (3600 * MEGA)
 
 /// Responses have an 8-byte prefix containing the topic hash that the response is for.
-#define RESPONSE_PAYLOAD_OVERHEAD_BYTES 8U
+#define RESPONSE_PAYLOAD_OVERHEAD_BYTES 16U
 
 // clang-format off
 static   size_t smaller(const size_t a,   const size_t b)   { return (a < b) ? a : b; }
@@ -748,6 +748,8 @@ static cy_err_t topic_new(cy_t* const        cy,
     topic->implicit_next = NULL;
     topic->implicit_prev = NULL;
 
+    topic->response_transfer_id = random_u64(cy);
+
     topic->pub_transfer_id = random_u64(cy); // https://forum.opencyphal.org/t/improve-the-transfer-id-timeout/2375
     topic->pub_count       = 0;
 
@@ -1447,26 +1449,26 @@ void cy_unsubscribe(cy_t* const cy, cy_subscriber_t* const sub)
     (void)sub;
 }
 
-cy_err_t cy_respond(cy_t* const                  cy,
-                    cy_topic_t* const            topic,
-                    const cy_us_t                tx_deadline,
-                    const cy_transfer_metadata_t metadata,
-                    const cy_buffer_borrowed_t   payload)
+cy_err_t cy_respond(cy_t* const                cy,
+                    cy_topic_t* const          topic,
+                    const cy_us_t              tx_deadline,
+                    cy_transfer_metadata_t     metadata,
+                    const cy_buffer_borrowed_t payload)
 {
     assert(topic != NULL);
     const cy_err_t res = ensure_joined(cy);
     if (res != CY_OK) {
         return res;
     }
-    // All responses are sent to the same P2P service-ID; they are discriminated by the topic hash.
-    // TODO: the transfer-ID of the message shall be encoded in the payload; the metadata needs a new transfer-ID!
+    const uint64_t response_header[2] = { topic->hash, metadata.transfer_id };
+    metadata.transfer_id              = topic->response_transfer_id++;
     return cy->platform->p2p(cy,
-                             CY_P2P_SERVICE_ID_TOPIC_RESPONSE,
+                             CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
                              metadata,
                              tx_deadline,
                              (cy_buffer_borrowed_t){
                                .next = &payload,
-                               .view = { .size = RESPONSE_PAYLOAD_OVERHEAD_BYTES, .data = &topic->hash },
+                               .view = { .size = sizeof(response_header), .data = &response_header },
                              });
 }
 
@@ -1799,17 +1801,19 @@ void cy_ingest_topic_response_transfer(cy_t* const cy, cy_transfer_owned_t trans
     assert(cy != NULL);
     mark_neighbor(cy, transfer.metadata.remote_node_id, transfer.timestamp);
 
-    // TODO: proper deserialization. This fails if the first <8 bytes are fragmented.
-    if (transfer.payload.base.view.size < 8U) {
+    // TODO: proper deserialization. This fails if the first 16 bytes are fragmented (although they can't be...).
+    if (transfer.payload.base.view.size < RESPONSE_PAYLOAD_OVERHEAD_BYTES) {
         cy->platform->buffer_release(cy, transfer.payload);
         return; // Malformed response. The first 8 bytes shall contain the full topic hash.
     }
 
-    // Deserialize the topic hash. The rest of the payload is for the application.
-    uint64_t topic_hash = 0;
-    memcpy(&topic_hash, transfer.payload.base.view.data, sizeof(topic_hash));
-    transfer.payload.base.view.size -= sizeof(topic_hash);
-    transfer.payload.base.view.data = ((const char*)transfer.payload.base.view.data) + sizeof(topic_hash);
+    // Deserialize the header. The rest of the payload is for the application.
+    uint64_t response_header[2];
+    memcpy(&response_header, transfer.payload.base.view.data, sizeof(response_header));
+    transfer.payload.base.view.size -= sizeof(response_header);
+    transfer.payload.base.view.data   = ((const char*)transfer.payload.base.view.data) + sizeof(response_header);
+    const uint64_t topic_hash         = response_header[0];
+    const uint64_t transfer_id_masked = response_header[1] & cy->platform->transfer_id_mask;
 
     // Find the topic -- log(N) lookup.
     cy_topic_t* const topic = cy_topic_find_by_hash(cy, topic_hash);
@@ -1819,8 +1823,6 @@ void cy_ingest_topic_response_transfer(cy_t* const cy, cy_transfer_owned_t trans
     }
 
     // Find the matching pending response future -- log(N) lookup.
-    // TODO FIXME: the transfer ID comes from the message, not from the transfer metadata!
-    const uint64_t   transfer_id_masked = transfer.metadata.transfer_id & cy->platform->transfer_id_mask;
     cy_tree_t* const tr =
       cavl2_find(topic->futures_by_transfer_id, &transfer_id_masked, &cavl_comp_future_transfer_id_masked);
     if (tr == NULL) {

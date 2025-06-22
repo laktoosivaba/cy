@@ -20,6 +20,7 @@
       <w>pktinfo</w>
       <w>popcount</w>
       <w>reuseport</w>
+      <w>rnid</w>
       <w>splitmix</w>
       <w>tfer</w>
       <w>udpard</w>

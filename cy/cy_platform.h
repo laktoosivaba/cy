@@ -52,16 +52,16 @@ typedef struct cy_bloom64_t  cy_bloom64_t;
 typedef struct cy_platform_t cy_platform_t;
 #endif
 
-/// When a response to a received message is sent, it is delivered as a P2P transfer to this service-ID.
+/// When a response to a received message is sent, it is delivered as an RPC transfer to this service-ID.
 /// The receiver of the response will be able to match the response with a specific request using the transfer-ID.
 /// The response user data is immediately prefixed with the following data (in DSDL notation):
 ///
 ///     uint64 topic_hash   # The hash of the topic that the response is for.
 ///     uint64 transfer_id  # The masked transfer-ID of the message that this response is for.
 ///     # Response payload follows immediately after this header.
-#define CY_P2P_SERVICE_ID_TOPIC_RESPONSE 510
+#define CY_RPC_SERVICE_ID_TOPIC_RESPONSE 510
 
-/// When a node sends a message over a reliable topic or sends a reliable response P2P transfer,
+/// When a node sends a message over a reliable topic or sends a reliable response RPC transfer,
 /// it expects acknowledgments from the receivers to be sent to this service-ID.
 /// Acknowledgements are strictly single-frame transfers (except for the inherently limited Classic CAN transport).
 ///
@@ -75,7 +75,7 @@ typedef struct cy_platform_t cy_platform_t;
 ///     uint64 topic_hash   # Like in the topic response.
 ///     uint64 transfer_id  # The masked transfer-ID of the transfer that this ack is for.
 ///     uint8  kind         # 0 -- message positive ack; 1 -- response positive ack.
-#define CY_P2P_SERVICE_ID_RELIABLE_ACK 511
+#define CY_RPC_SERVICE_ID_RELIABLE_ACK 511
 
 /// An ordinary Bloom filter with 64-bit words.
 struct cy_bloom64_t
@@ -190,6 +190,15 @@ struct cy_topic_t
     /// Used for matching futures against received responses.
     cy_tree_t* futures_by_transfer_id;
 
+    /// Currently, we use a shared response transfer-ID counter for all publishers. We could store an independent
+    /// counter per remote publisher, but it requires dynamic memory and also lookups while bringing little practical
+    /// benefit, because responses do not care about transfer-ID contiguity.
+    /// See https://github.com/OpenCyphal/libudpard/issues/66.
+    /// This would create issues if we were using negative acknowledgments like in PGM et al because the response
+    /// receiver (i.e., publisher of the original message that we are responding to) would see gaps in the transfer-ID
+    /// and assume that some transfers were lost, but we use positive acknowledgments here only.
+    uint64_t response_transfer_id;
+
     /// Only used if the application publishes data on this topic.
     /// pub_count tracks the number of existing advertisements on this topic; when this number reaches zero
     /// and there are no live subscriptions, the topic will be garbage collected by Cy.
@@ -261,7 +270,7 @@ typedef void (*cy_platform_node_id_clear_t)(cy_t*);
 /// Every invocation returns a mutable borrowed reference to the filter, which outlives the Cy instance.
 typedef cy_bloom64_t* (*cy_platform_node_id_bloom_t)(cy_t*);
 
-/// Instructs the underlying transport layer to send a peer-to-peer transfer.
+/// Instructs the underlying transport layer to send a peer-to-peer transfer with the specified transfer-ID etc.
 typedef cy_err_t (*cy_platform_p2p_t)(cy_t*,
                                       uint16_t                     service_id,
                                       const cy_transfer_metadata_t metadata,
@@ -285,7 +294,7 @@ typedef void (*cy_platform_topic_unsubscribe_t)(cy_t*, cy_topic_t*);
 
 /// Invoked when a new publisher is created on the topic.
 /// The main purpose here is to communicate the response extent requested by this publisher to the platform layer,
-/// allowing it to configure the P2P session accordingly.
+/// allowing it to configure the RPC session accordingly.
 /// The requested extent is adjusted for any protocol overheads, so that the platform layer does not have to handle it.
 typedef void (*cy_platform_topic_advertise_t)(cy_t*, cy_topic_t*, size_t response_extent_with_overhead);
 
@@ -479,12 +488,11 @@ void cy_notify_node_id_collision(cy_t* const cy);
 /// to ensure that the latest state updates are reflected in the next heartbeat message.
 void cy_ingest_topic_transfer(cy_t* const cy, cy_topic_t* const topic, cy_transfer_owned_t transfer);
 
-/// Cy does not manage P2P endpoints explicitly; it is the responsibility of the transport-specific glue logic.
-/// Currently, the following P2P endpoints must be implemented in the glue logic:
+/// Cy does not manage RPC endpoints explicitly; it is the responsibility of the transport-specific glue logic.
+/// Currently, the following RPC endpoints must be implemented in the glue logic:
 ///
-///     - CY_P2P_SERVICE_ID_TOPIC_RESPONSE handler.
-///       Delivers the optional response to a message published on a topic.
-///       The first 8 bytes of the transfer payload are the topic hash to which the response is sent.
+///     - CY_RPC_SERVICE_ID_TOPIC_RESPONSE
+///     - CY_RPC_SERVICE_ID_RELIABLE_ACK
 void cy_ingest_topic_response_transfer(cy_t* const cy, cy_transfer_owned_t transfer);
 
 /// For diagnostics and logging only. Do not use in embedded and real-time applications.

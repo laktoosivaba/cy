@@ -45,7 +45,7 @@ static void default_rpc_rx_sock_err_handler(cy_udp_posix_t* const cy_udp,
     CY_TRACE(&cy_udp->base, "⚠️ RPC RX socket error on iface #%u: %u", iface_index, (unsigned)err_no);
 }
 
-static void default_rx_sock_err_handler(cy_udp_posix_t*             cy_udp,
+static void default_rx_sock_err_handler(cy_udp_posix_t* const       cy_udp,
                                         cy_udp_posix_topic_t* const topic,
                                         const uint_fast8_t          iface_index,
                                         const uint32_t              err_no)
@@ -99,7 +99,7 @@ static void rpc_listen(cy_udp_posix_t* const cy_udp)
     assert(cy_udp->base.node_id <= UDPARD_NODE_ID_MAX);
     const int_fast8_t res = udpardRxRPCDispatcherListen(&cy_udp->rpc_rx_dispatcher,
                                                         &cy_udp->rpc_rx_port_topic_response,
-                                                        CY_P2P_SERVICE_ID_TOPIC_RESPONSE,
+                                                        CY_RPC_SERVICE_ID_TOPIC_RESPONSE,
                                                         true,
                                                         cy_udp->response_extent_with_overhead);
     assert(res >= 0); // infallible by design!
@@ -115,7 +115,7 @@ static void rpc_listen(cy_udp_posix_t* const cy_udp)
 static void rpc_unlisten(cy_udp_posix_t* const cy_udp)
 {
     const int_fast8_t res =
-      udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_P2P_SERVICE_ID_TOPIC_RESPONSE, true);
+      udpardRxRPCDispatcherCancel(&cy_udp->rpc_rx_dispatcher, CY_RPC_SERVICE_ID_TOPIC_RESPONSE, true);
     assert(res >= 0); // infallible by design
 }
 
@@ -610,7 +610,7 @@ static void ingest_rpc_frame(cy_udp_posix_t* const             cy_udp,
     if (er == 1) {
         assert(port != NULL);
         if (port == &cy_udp->rpc_rx_port_topic_response) {
-            assert(port->service_id == CY_P2P_SERVICE_ID_TOPIC_RESPONSE);
+            assert(port->service_id == CY_RPC_SERVICE_ID_TOPIC_RESPONSE);
             const cy_transfer_owned_t tr = { .timestamp = (cy_us_t)transfer.base.timestamp_usec,
                                              .metadata  = make_metadata(&transfer.base),
                                              .payload   = make_rx_buffer(transfer.base.payload) };

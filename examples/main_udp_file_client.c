@@ -114,6 +114,11 @@ int main(const int argc, char* argv[])
         assert(future.state == cy_future_success);
 
         // Process the next chunk.
+        CY_TRACE(cy,
+                 "Received response [rnid=%04x tid=%016llx]: offset %llu",
+                 future.last_response.metadata.remote_node_id,
+                 (unsigned long long)future.last_response.metadata.transfer_id,
+                 (unsigned long long)req.read_offset);
         struct file_read_response_t resp;
         const size_t                resp_size =
           cy_buffer_owned_gather(future.last_response.payload, (cy_bytes_mut_t){ .size = sizeof(resp), .data = &resp });

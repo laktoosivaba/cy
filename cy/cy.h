@@ -388,11 +388,11 @@ void cy_unsubscribe(cy_t* const cy, cy_subscriber_t* const sub);
 /// in the process but it doesn't matter.
 ///
 /// The response is sent using a P2P transfer to the publisher with the specified priority and the original transfer-ID.
-cy_err_t cy_respond(cy_t* const                  cy,
-                    cy_topic_t* const            topic,
-                    const cy_us_t                tx_deadline,
-                    const cy_transfer_metadata_t metadata,
-                    const cy_buffer_borrowed_t   payload);
+cy_err_t cy_respond(cy_t* const                cy,
+                    cy_topic_t* const          topic,
+                    const cy_us_t              tx_deadline,
+                    cy_transfer_metadata_t     metadata,
+                    const cy_buffer_borrowed_t payload);
 
 /// Copies the subscriber name into the user-supplied buffer.
 void cy_subscriber_name(const cy_t* const cy, const cy_subscriber_t* const sub, char* const out_name);
