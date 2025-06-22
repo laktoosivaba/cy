@@ -613,6 +613,8 @@ static void topic_allocate(cy_t* const       cy, // NOLINT(*-no-recursion)
 {
     assert(cy->topic_count <= CY_TOPIC_SUBJECT_COUNT); // There is certain to be a free subject-ID!
 
+    // Consider extracting everything prior to the loop into topic_allocate_prologue() and everything after the loop
+    // into topic_allocate_epilogue() to focus on the main logic.
     static const int         call_depth_indent = 2;
     static _Thread_local int call_depth        = 0U;
     call_depth++;
@@ -1094,7 +1096,6 @@ static void on_heartbeat(cy_t* const cy, const cy_arrival_t* const evt)
                          topic_subject_id(other_hash, other_evictions),
                          (unsigned long long)other_evictions,
                          other_lage);
-                assert(mine->evictions != other_evictions);
                 if ((mine_lage > other_lage) || ((mine_lage == other_lage) && (mine->evictions > other_evictions))) {
                     CY_TRACE(cy, "We won, existing allocation not altered; expecting remote to adjust.");
                     prioritize_gossip(cy, mine, 100);

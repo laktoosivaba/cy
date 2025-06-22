@@ -100,6 +100,19 @@ Build-time dependencies, all single-header-only:
 - [`wkv.h`](https://github.com/pavel-kirienko/wild_key_value) -- key-value container with fast pattern matching & routing.
 - [`rapidhash.h`](https://github.com/Nicoshev/rapidhash) -- a good 64-bit hash by Nicolas De Carli (BSD 2-clause license).
 
+
+## Prior art
+
+### [Group Address Allocation Protocol (GAAP)](https://datatracker.ietf.org/doc/html/draft-ietf-pim-gaap-03)
+
+Instead of CRDT, the GAAP relies on the conventional claim/deny approach. Otherwise, the protocol is very similar in 
+spirit.
+
+### [RTI Connext DDS `TRANSPORT_MULTICAST_MAPPING`](https://community.rti.com/static/documentation/connext-dds/current/doc/manuals/connext_dds_professional/users_manual/users_manual/TRANSPORT_MULTICAST_MAPPING_Qos.htm)
+
+This is a semi-manual approach based on pattern matching within a predefined set of multicast groups.
+
+
 ## Solution
 
 ### Node-ID autoconfiguration
