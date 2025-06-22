@@ -103,9 +103,14 @@ static void rpc_listen(cy_udp_posix_t* const cy_udp)
                                                         true,
                                                         cy_udp->response_extent_with_overhead);
     assert(res >= 0); // infallible by design!
-    // https://github.com/pavel-kirienko/cy/issues/8
-    // https://github.com/OpenCyphal/libudpard/issues/63 (applies to requests only in this case)
-    cy_udp->rpc_rx_port_topic_response.port.transfer_id_timeout_usec = 0;
+    // We used to set the transfer-ID timeout to zero here, but this is no longer needed because we now use independent
+    // transfer-ID counters for response transfers because the old approach is flawed; see this for details:
+    // https://github.com/OpenCyphal/specification/issues/148.
+    // Now, the ordering of response transfer-ID values matches the ordering in which the responses are sent.
+    // If interleaving is still present due to network effects, libudpard will handle it correctly because it
+    // supports out-of-order frames even if they interleave between adjacent transfers.
+    cy_udp->rpc_rx_port_topic_response.port.transfer_id_timeout_usec =
+      (UdpardMicrosecond)cy_udp->rpc_transfer_id_timeout;
     CY_TRACE(&cy_udp->base,
              "🎧 RPC service_id=%04x extent=%zu",
              cy_udp->rpc_rx_port_topic_response.service_id,
@@ -458,6 +463,7 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
     assert(cy_udp != NULL);
     memset(cy_udp, 0, sizeof(*cy_udp));
     cy_udp->response_extent_with_overhead = 64; // We start from an arbitrary value that just makes sense.
+    cy_udp->rpc_transfer_id_timeout       = CY_TRANSFER_ID_TIMEOUT_DEFAULT_us;
     // Set up the memory resources. We could use block pool allocator here as well!
     cy_udp->mem.allocate                  = mem_alloc;
     cy_udp->mem.deallocate                = mem_free;
