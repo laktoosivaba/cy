@@ -21,6 +21,7 @@
       <w>opencyphal</w>
       <w>pktinfo</w>
       <w>popcount</w>
+      <w>remappings</w>
       <w>reuseport</w>
       <w>rnid</w>
       <w>splitmix</w>
@@ -28,6 +29,7 @@
       <w>udpard</w>
       <w>unadvertise</w>
       <w>usec</w>
+      <w>zmaap</w>
     </words>
   </dictionary>
 </component>
