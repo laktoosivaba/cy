@@ -53,7 +53,7 @@ include_directories(${CMAKE_SOURCE_DIR}/lib ${CMAKE_SOURCE_DIR}/lib/wild_key_val
 # Overriding the preferred subject-ID creates a very challenging environment for the consensus algorithm,
 # increasing the random pick collision probability to 100%.
 add_compile_definitions(
-        CY_CONFIG_TRACE=0
+        CY_CONFIG_TRACE=1
         CY_CONFIG_HEARTBEAT_TOPIC_NAME="/@/8191"
         CY_CONFIG_PREFERRED_TOPIC_OVERRIDE=0
 )

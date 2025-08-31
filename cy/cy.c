@@ -1204,6 +1204,7 @@ cy_err_t cy_advertise(cy_t* const cy, cy_publisher_t* const pub, const wkv_str_t
     const wkv_str_t resolved_name = wkv_key(name_buf);
     memset(pub, 0, sizeof(*pub));
     const cy_err_t res = topic_ensure(cy, &pub->topic, resolved_name);
+
     pub->priority      = cy_prio_nominal;
     pub->user          = NULL;
     if (res == CY_OK) {
@@ -1630,9 +1631,6 @@ cy_err_t cy_new(cy_t* const                cy,
                 const uint16_t             node_id,
                 const wkv_str_t            namespace_)
 {
-    printf("%zu\n", sizeof(struct cy_t));
-    printf("%zu\n", sizeof(struct cy_platform_t));
-
     assert(cy != NULL);
     assert(uid != 0);
     assert(platform != NULL);
@@ -1736,6 +1734,15 @@ cy_err_t cy_new(cy_t* const                cy,
             }
         }
     }
+
+    CY_TRACE(cy,
+             "🚀 Cyphal new: uid=%016llx nid=%04x namespace='%s' name='%s' res=%d",
+             (unsigned long long)cy->uid,
+             cy->node_id,
+             cy->namespace_,
+             cy->name,
+             res);
+
     return res;
 }
 

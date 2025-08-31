@@ -4,6 +4,12 @@
 #define CY_WASM_NODE_ID_BLOOM_64BIT_WORDS 128
 
 typedef struct cy_wasm_t       cy_wasm_t;
+typedef struct cy_wasm_topic_t cy_wasm_topic_t;
+
+struct cy_wasm_topic_t
+{
+    cy_topic_t                  base;
+};
 
 struct cy_wasm_t
 {
@@ -23,7 +29,7 @@ struct cy_wasm_t
  * @param namespace_str Namespace string
  * @return Initialized cy_t structure (platform field will be NULL if initialization failed)
  */
-void cy_new_wasm(const uint64_t uid, const uint16_t node_id, const char* namespace_str);
+cy_err_t cy_wasm_new_main(const uint64_t uid, const uint16_t node_id);
 
 /**
  * Properly destroys a Cyphal instance that was created with cy_new_wasm.
@@ -31,3 +37,5 @@ void cy_new_wasm(const uint64_t uid, const uint16_t node_id, const char* namespa
  * @param instance The Cyphal instance to destroy
  */
 void cy_destroy_wasm(cy_t instance);
+
+cy_err_t cy_wasm_spin_once(cy_wasm_t* const cy_wasm);
