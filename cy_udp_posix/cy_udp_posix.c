@@ -9,9 +9,10 @@
 
 #include "cy_udp_posix.h"
 
-#ifndef __USE_POSIX199309
-#define __USE_POSIX199309 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#endif
+// #ifndef __USE_POSIX199309
+// #define __USE_POSIX199309 // NOLINT(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
+// #endif
+#define _POSIX_C_SOURCE 199309L
 #include "udp_wrapper.h"
 
 #include <assert.h>
@@ -20,6 +21,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <stdio.h>
 
 /// Maximum expected incoming datagram size. If larger jumbo frames are expected, this value should be increased.
 #ifndef CY_UDP_SOCKET_READ_BUFFER_SIZE
@@ -177,7 +179,7 @@ static uint64_t platform_prng(const cy_t* const cy)
 {
     (void)cy;
     struct timespec ts;
-    const int       res = clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    const int       res = clock_gettime(CLOCK_MONOTONIC, &ts);
     assert(res == 0);
     return (uint64_t)ts.tv_nsec;
 }
@@ -490,6 +492,7 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
         res                            = err_from_udpard(
           udpardTxInit(&cy_udp->tx[i].udpard_tx, &cy_udp->base.node_id, tx_queue_capacity_per_iface, cy_udp->mem));
     }
+
     if (res != CY_OK) {
         return res; // Cleanup not required -- no resources allocated yet.
     }
@@ -498,6 +501,7 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
     // Initialize the bottom layer first. Rx sockets are initialized per subscription, so not here.
     for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res == CY_OK); i++) {
         if (is_valid_ip(local_iface_address[i])) {
+            fprintf(stderr, "333\n");
             cy_udp->local_iface_address[i] = local_iface_address[i];
             res                            = err_from_udp_wrapper(
               udp_wrapper_tx_init(&cy_udp->tx[i].sock, local_iface_address[i], &cy_udp->tx[i].local_port));
@@ -511,6 +515,7 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
         res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
     }
 
+    fprintf(stderr, "555\n");
     // Cleanup on error.
     if (res != CY_OK) {
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {

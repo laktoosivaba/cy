@@ -28,12 +28,26 @@
 /// RFC 2474.
 #define DSCP_MAX 63
 
-struct in_pktinfo
+// struct in_pktinfo
+//{
+//    unsigned ipi_ifindex;  // incoming ifindex
+//    uint32_t ipi_spec_dst; // local destination address
+//    uint32_t ipi_addr;     // header source address
+//};
+
+static inline struct cmsghdr*
+
+NXT_CMSG_NXTHDR(struct msghdr* msg, struct cmsghdr* cmsg)
 {
-    unsigned ipi_ifindex;  // incoming ifindex
-    uint32_t ipi_spec_dst; // local destination address
-    uint32_t ipi_addr;     // header source address
-};
+#ifndef __GLIBC__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-compare"
+#endif
+    return CMSG_NXTHDR(msg, cmsg);
+#ifndef __GLIBC__
+#pragma clang diagnostic pop
+#endif
+}
 
 static bool is_multicast(const uint32_t address)
 {
@@ -229,7 +243,7 @@ int16_t udp_wrapper_rx_receive(udp_wrapper_rx_t* const self, size_t* const inout
         if (n >= 0) {
             // locate IP_PKTINFO
             struct in_pktinfo* pi = NULL;
-            for (struct cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+            for (struct cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = NXT_CMSG_NXTHDR(&msg, c)) {
                 if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
                     pi = (struct in_pktinfo*)CMSG_DATA(c);
                     break;
@@ -238,7 +252,7 @@ int16_t udp_wrapper_rx_receive(udp_wrapper_rx_t* const self, size_t* const inout
             // drop out own traffic and only accept packets from the right iface.
             if (pi == NULL) {
                 res = -EIO;
-            } else if (pi->ipi_ifindex != self->allow_iface_index) {
+            } else if ((int)pi->ipi_ifindex != (int)self->allow_iface_index) {
                 res = 0; // wrong iface -- ignore
             } else if ((ntohl(src.sin_addr.s_addr) == self->deny_source_address) &&
                        (ntohs(src.sin_port) == self->deny_source_port)) {

@@ -1,0 +1,33 @@
+// cy_wasm.h
+#include "cy_platform.h"
+
+#define CY_WASM_NODE_ID_BLOOM_64BIT_WORDS 128
+
+typedef struct cy_wasm_t       cy_wasm_t;
+
+struct cy_wasm_t
+{
+    cy_t base;
+
+    uint64_t     node_id_bloom_storage[CY_WASM_NODE_ID_BLOOM_64BIT_WORDS];
+    cy_bloom64_t node_id_bloom;
+};
+
+/**
+ * Creates and initializes a new Cyphal instance with WebAssembly-friendly interface.
+ * Returns the full structure by value instead of using pointers.
+ *
+ * @param platform Structure containing platform implementation functions
+ * @param uid Node unique identifier
+ * @param node_id Initial node ID or CY_NODE_ID_INVALID
+ * @param namespace_str Namespace string
+ * @return Initialized cy_t structure (platform field will be NULL if initialization failed)
+ */
+void cy_new_wasm(const uint64_t uid, const uint16_t node_id, const char* namespace_str);
+
+/**
+ * Properly destroys a Cyphal instance that was created with cy_new_wasm.
+ *
+ * @param instance The Cyphal instance to destroy
+ */
+void cy_destroy_wasm(cy_t instance);

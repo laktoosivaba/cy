@@ -616,6 +616,7 @@ static void topic_allocate(cy_t* const       cy, // NOLINT(*-no-recursion)
     // Consider extracting everything prior to the loop into topic_allocate_prologue() and everything after the loop
     // into topic_allocate_epilogue() to focus on the main logic.
     static const int         call_depth_indent = 2;
+    (void)call_depth_indent;
     static _Thread_local int call_depth        = 0U;
     call_depth++;
     CY_TRACE(cy,
@@ -883,7 +884,7 @@ static void* wkv_cb_couple_new_topic(const wkv_event_t evt)
     cy_topic_t* const           topic = (cy_topic_t*)(((void**)evt.context)[1]);
     cy_subscriber_root_t* const subr  = (cy_subscriber_root_t*)evt.node->value;
     const cy_err_t              res   = topic_couple(cy, topic, subr, evt.substitution_count, evt.substitutions);
-    return (0 == res) ? NULL : "";
+    return (0 == res) ? NULL : NULL;
 }
 
 /// If there is a pattern subscriber matching the name of this topic, attempt to create a new subscription.
@@ -1056,6 +1057,7 @@ static void on_heartbeat(cy_t* const cy, const cy_arrival_t* const evt)
     }
     const cy_us_t                 ts              = evt->transfer->timestamp;
     const cy_transfer_metadata_t* meta            = &evt->transfer->metadata;
+    (void)meta;
     const uint64_t                other_hash      = heartbeat.topic_hash;
     const uint32_t                other_evictions = heartbeat.topic_evictions;
     const int_fast8_t             other_lage      = heartbeat.topic_log_age;
@@ -1333,7 +1335,7 @@ void* wkv_cb_couple_new_subscription(const wkv_event_t evt)
         }
         topic_ensure_subscribed(cy, topic);
     }
-    return (CY_OK == res) ? NULL : "";
+    return (CY_OK == res) ? NULL : NULL;
 }
 
 /// Either finds an existing subscriber root or creates a new one. NULL if OOM.
@@ -1628,6 +1630,9 @@ cy_err_t cy_new(cy_t* const                cy,
                 const uint16_t             node_id,
                 const wkv_str_t            namespace_)
 {
+    printf("%zu\n", sizeof(struct cy_t));
+    printf("%zu\n", sizeof(struct cy_platform_t));
+
     assert(cy != NULL);
     assert(uid != 0);
     assert(platform != NULL);

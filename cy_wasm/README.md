@@ -1,0 +1,4 @@
+- `emcmake cmake ..`
+- `emmake make clean`
+- `emmake make`
+- `emcc cy_wasm/libcy_wasm.a -o /Users/andrey/Projects/rust/cy_wasm/lib/cy/libcy.js -sEXPORT_ES6 -sMODULARIZE -sEXPORTED_FUNCTIONS=_cy_new -sEXPORTED_RUNTIME_METHODS=ccall,cwrap`
