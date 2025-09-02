@@ -35,7 +35,8 @@ static cy_us_t platform_now(const cy_t* const cy)
 }
 
 __attribute__((import_module("env"), import_name("wasm_prng"))) extern uint64_t wasm_prng(void);
-static uint64_t                                                                 platform_prng(const cy_t* const cy)
+
+static uint64_t platform_prng(const cy_t* const cy)
 {
     (void)cy;
     return wasm_prng();
@@ -48,7 +49,8 @@ static void platform_buffer_release(cy_t* cy, cy_buffer_owned_t buffer)
     wasm_buffer_release((void*)&buffer);
 }
 
-__attribute__((import_module("env"), import_name("wasm_node_id_set"))) extern cy_err_t wasm_node_id_set(uint16_t node_id);
+__attribute__((import_module("env"), import_name("wasm_node_id_set"))) extern cy_err_t wasm_node_id_set(
+  uint16_t node_id);
 
 static cy_err_t platform_node_id_set(cy_t* cy)
 {
