@@ -12,6 +12,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static void* mem_alloc(void* const user, const size_t size)
+{
+    cy_wasm_t* const cy_wasm = (cy_wasm_t*)user;
+    void* const      out     = malloc(size);
+    if (size > 0) {
+        if (out != NULL) {
+            cy_wasm->mem_allocated_fragments++;
+        } else {
+            cy_wasm->mem_oom_count++;
+        }
+    }
+    return out;
+}
+
 __attribute__((import_module("env"), import_name("wasm_now"))) extern cy_us_t wasm_now(void);
 
 static cy_us_t platform_now(const cy_t* const cy)
@@ -21,7 +35,7 @@ static cy_us_t platform_now(const cy_t* const cy)
 }
 
 __attribute__((import_module("env"), import_name("wasm_prng"))) extern uint64_t wasm_prng(void);
-static uint64_t platform_prng(const cy_t* const cy)
+static uint64_t                                                                 platform_prng(const cy_t* const cy)
 {
     (void)cy;
     return wasm_prng();
@@ -34,12 +48,12 @@ static void platform_buffer_release(cy_t* cy, cy_buffer_owned_t buffer)
     wasm_buffer_release((void*)&buffer);
 }
 
-__attribute__((import_module("env"), import_name("wasm_node_id_set"))) extern cy_err_t wasm_node_id_set(void);
+__attribute__((import_module("env"), import_name("wasm_node_id_set"))) extern cy_err_t wasm_node_id_set(uint16_t node_id);
 
 static cy_err_t platform_node_id_set(cy_t* cy)
 {
-    (void)cy;
-    return wasm_node_id_set();
+    assert(cy != NULL);
+    return wasm_node_id_set(cy->node_id);
 }
 
 __attribute__((import_module("env"), import_name("wasm_node_id_clear"))) extern void wasm_node_id_clear(void);
@@ -78,13 +92,16 @@ static cy_err_t platform_p2p(cy_t*                        cy,
     return wasm_p2p(service_id, &metadata, tx_deadline, (void*)&payload);
 }
 
-__attribute__((import_module("env"), import_name("wasm_topic_new"))) extern cy_topic_t* wasm_topic_new(void);
+__attribute__((import_module("env"), import_name("wasm_topic_new"))) extern cy_topic_t* wasm_topic_new(
+  cy_topic_t* cy_topic);
 
-static cy_topic_t* platform_topic_new(cy_t* cy)
+static cy_topic_t* platform_topic_new(cy_t* const cy)
 {
-    (void)cy;
-    printf("platform_topic_new called size=%lu\n", sizeof(cy_wasm_topic_t));
-    return wasm_topic_new();
+    cy_wasm_topic_t* const topic = (cy_wasm_topic_t*)mem_alloc(cy, sizeof(cy_wasm_topic_t));
+    if (topic != NULL) {
+        memset(topic, 0, sizeof(cy_wasm_topic_t));
+    }
+    return wasm_topic_new((cy_topic_t*)topic);
 }
 
 __attribute__((import_module("env"), import_name("wasm_topic_destroy"))) extern void wasm_topic_destroy(void* topic);
@@ -105,13 +122,15 @@ static cy_err_t platform_topic_publish(cy_t* cy, cy_publisher_t* pub, cy_us_t de
 }
 
 __attribute__((import_module("env"), import_name("wasm_topic_subscribe"))) extern cy_err_t wasm_topic_subscribe(
-  void* topic,
-  void* params);
+  cy_topic_t* const              cy_topic,
+  const cy_subscription_params_t params);
 
-static cy_err_t platform_topic_subscribe(cy_t* cy, cy_topic_t* topic, cy_subscription_params_t params)
+static cy_err_t platform_topic_subscribe(cy_t* const                    cy,
+                                         cy_topic_t* const              cy_topic,
+                                         const cy_subscription_params_t params)
 {
     (void)cy;
-    return wasm_topic_subscribe(topic, &params);
+    return wasm_topic_subscribe(cy_topic, params);
 }
 
 __attribute__((import_module("env"), import_name("wasm_topic_unsubscribe"))) extern void wasm_topic_unsubscribe(
@@ -234,9 +253,7 @@ cy_err_t cy_wasm_new_main(const uint64_t uid, const uint16_t node_id)
 {
     cy_wasm_t cy_wasm;
 
-    cy_err_t       res = cy_wasm_new(&cy_wasm, uid, node_id);
-
-    printf("cy_wasm_new_main res: res=%d\n", res);
+    cy_err_t res = cy_wasm_new(&cy_wasm, uid, node_id);
 
     if (res != CY_OK) {
         errx(res, "cy_udp_posix_new");
@@ -249,7 +266,7 @@ cy_err_t cy_wasm_new_main(const uint64_t uid, const uint16_t node_id)
     res = cy_subscribe_c(cy, &sub_file_read, "file/read", 1024, on_file_read_msg);
 
     if (res != CY_OK) {
-    printf("Failed to subscribe to file/read: %d\n", res);
+        printf("Failed to subscribe to file/read: %d\n", res);
     }
 
     return res;

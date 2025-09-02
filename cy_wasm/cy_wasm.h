@@ -17,6 +17,9 @@ struct cy_wasm_t
 
     uint64_t     node_id_bloom_storage[CY_WASM_NODE_ID_BLOOM_64BIT_WORDS];
     cy_bloom64_t node_id_bloom;
+
+    size_t   mem_allocated_fragments;
+    uint64_t mem_oom_count;
 };
 
 /**
