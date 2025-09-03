@@ -41,4 +41,4 @@ cy_err_t cy_wasm_new_main(const uint64_t uid, const uint16_t node_id);
  */
 void cy_destroy_wasm(cy_t instance);
 
-cy_err_t cy_wasm_spin_once(cy_wasm_t* const cy_wasm);
+cy_err_t cy_wasm_spin_once(void);

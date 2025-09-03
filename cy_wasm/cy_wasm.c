@@ -222,7 +222,7 @@ static const cy_platform_t g_platform = {
     .transfer_id_mask = UINT64_MAX,
 };
 
-const char* namespace_str = "~";
+const char* namespace_str = "lala";
 
 void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
 {
@@ -232,30 +232,30 @@ void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
     // For example, you can read the requested file and send a response
 }
 
-cy_err_t cy_wasm_new(cy_wasm_t* const cy_wasm, const uint64_t uid, const uint16_t node_id)
-{
-    assert(cy_wasm != NULL);
-    memset(cy_wasm, 0, sizeof(*cy_wasm));
+cy_wasm_t cy_wasm;
 
-    cy_wasm->node_id_bloom.storage  = cy_wasm->node_id_bloom_storage;
-    cy_wasm->node_id_bloom.n_bits   = sizeof(cy_wasm->node_id_bloom_storage) * CHAR_BIT;
-    cy_wasm->node_id_bloom.popcount = 0;
+cy_err_t cy_wasm_new(const uint64_t uid, const uint16_t node_id)
+{
+    assert(&cy_wasm != NULL);
+    memset(&cy_wasm, 0, sizeof(cy_wasm));
+
+    cy_wasm.node_id_bloom.storage  = cy_wasm.node_id_bloom_storage;
+    cy_wasm.node_id_bloom.n_bits   = sizeof(cy_wasm.node_id_bloom_storage) * CHAR_BIT;
+    cy_wasm.node_id_bloom.popcount = 0;
 
     cy_err_t res = CY_OK;
 
     if (res == CY_OK) {
         // res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
-        res = cy_new(&cy_wasm->base, &g_platform, uid, node_id, wkv_key(namespace_str));
+        res = cy_new(&cy_wasm.base, &g_platform, uid, node_id, wkv_key(namespace_str));
     }
 
     return res;
 }
 
-cy_err_t cy_wasm_new_main(const uint64_t uid, const uint16_t node_id)
+cy_err_t  cy_wasm_new_main(const uint64_t uid, const uint16_t node_id)
 {
-    cy_wasm_t cy_wasm;
-
-    cy_err_t res = cy_wasm_new(&cy_wasm, uid, node_id);
+    cy_err_t res = cy_wasm_new(uid, node_id);
 
     if (res != CY_OK) {
         errx(res, "cy_udp_posix_new");
@@ -283,10 +283,11 @@ void cy_destroy_wasm(cy_t instance)
     }
 }
 
-cy_err_t cy_wasm_spin_once(cy_wasm_t* const cy_wasm)
+cy_err_t cy_wasm_spin_once(void)
 {
-    assert(cy_wasm != NULL);
+    assert(&cy_wasm != NULL);
+    assert(&cy_wasm.base != NULL);
 
-    return 0;
+    return CY_OK;
     // return spin_once_until(cy_wasm, min_i64(cy_udp_posix_now() + 1000, cy_wasm->base.heartbeat_next));
 }

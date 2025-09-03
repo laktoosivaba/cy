@@ -501,7 +501,6 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
     // Initialize the bottom layer first. Rx sockets are initialized per subscription, so not here.
     for (uint_fast8_t i = 0; (i < CY_UDP_POSIX_IFACE_COUNT_MAX) && (res == CY_OK); i++) {
         if (is_valid_ip(local_iface_address[i])) {
-            fprintf(stderr, "333\n");
             cy_udp->local_iface_address[i] = local_iface_address[i];
             res                            = err_from_udp_wrapper(
               udp_wrapper_tx_init(&cy_udp->tx[i].sock, local_iface_address[i], &cy_udp->tx[i].local_port));
@@ -515,7 +514,6 @@ cy_err_t cy_udp_posix_new(cy_udp_posix_t* const cy_udp,
         res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
     }
 
-    fprintf(stderr, "555\n");
     // Cleanup on error.
     if (res != CY_OK) {
         for (uint_fast8_t i = 0; i < CY_UDP_POSIX_IFACE_COUNT_MAX; i++) {
