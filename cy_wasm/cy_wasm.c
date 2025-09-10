@@ -12,18 +12,41 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+static void* platform_realloc(cy_t* const cy, void* const ptr, const size_t new_size)
+{
+    (void)cy;
+    if (new_size > 0) {
+        return realloc(ptr, new_size);
+    }
+    free(ptr);
+    return NULL;
+}
+
 static void* mem_alloc(void* const user, const size_t size)
 {
-    cy_wasm_t* const cy_wasm = (cy_wasm_t*)user;
-    void* const      out     = malloc(size);
+    cy_wasm_t* const cy_udp = (cy_wasm_t*)user;
+    void* const           out    = malloc(size);
     if (size > 0) {
         if (out != NULL) {
-            cy_wasm->mem_allocated_fragments++;
+            cy_udp->mem_allocated_fragments++;
         } else {
-            cy_wasm->mem_oom_count++;
+            cy_udp->mem_oom_count++;
         }
     }
     return out;
+}
+
+static void mem_free(void* const user, const size_t size, void* const pointer)
+{
+    cy_wasm_t* const cy_udp = (cy_wasm_t*)user;
+    (void)size;
+    if (pointer != NULL) {
+        assert(cy_udp->mem_allocated_fragments > 0);
+        cy_udp->mem_allocated_fragments--;
+        memset(pointer, 0xA5, size); // a simple diagnostic aid
+        free(pointer);
+    }
 }
 
 __attribute__((import_module("env"), import_name("wasm_now"))) extern cy_us_t wasm_now(void);
@@ -74,6 +97,7 @@ static void platform_node_id_clear(cy_t* cy)
 //     (void)cy;
 //     return wasm_node_id_bloom();
 // }
+
 static cy_bloom64_t* platform_node_id_bloom(cy_t* const cy)
 {
     assert(cy != NULL);
@@ -188,15 +212,29 @@ void cy_trace(cy_t* const         cy,
     printf("\n");
 }
 
-static void* platform_realloc(cy_t* const cy, void* const ptr, const size_t new_size)
+static void default_tx_sock_err_handler(cy_wasm_t* const cy_wasm,
+                                        const uint_fast8_t    iface_index,
+                                        const uint32_t        err_no)
 {
-    (void)cy;
-    if (new_size > 0) {
-        return realloc(ptr, new_size);
-    }
-    free(ptr);
-    return NULL;
+    CY_TRACE(&cy_wasm->base, "⚠️ TX socket error on iface #%u: %u", iface_index, (unsigned)err_no);
 }
+
+static void default_rpc_rx_sock_err_handler(cy_wasm_t* const cy_wasm,
+                                            const uint_fast8_t    iface_index,
+                                            const uint32_t        err_no)
+{
+    CY_TRACE(&cy_wasm->base, "⚠️ RPC RX socket error on iface #%u: %u", iface_index, (unsigned)err_no);
+}
+
+static void default_rx_sock_err_handler(cy_wasm_t* const       cy_wasm,
+                                        cy_wasm_topic_t* const topic,
+                                        const uint_fast8_t          iface_index,
+                                        const uint32_t              err_no)
+{
+    CY_TRACE(
+      &cy_wasm->base, "⚠️ RX socket error on iface #%u topic '%s': %u", iface_index, topic->base.name, (unsigned)err_no);
+}
+
 
 static const cy_platform_t g_platform = {
     .now            = platform_now,
@@ -232,62 +270,38 @@ void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
     // For example, you can read the requested file and send a response
 }
 
-cy_wasm_t cy_wasm;
-
-cy_err_t cy_wasm_new(const uint64_t uid, const uint16_t node_id)
+cy_err_t cy_wasm_new(cy_wasm_t* const cy_wasm,
+                          const uint64_t        uid,
+                          const uint32_t        local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
+                          const size_t          tx_queue_capacity_per_iface)
 {
-    assert(&cy_wasm != NULL);
-    memset(&cy_wasm, 0, sizeof(cy_wasm));
+    assert(cy_wasm != NULL);
+    memset(cy_wasm, 0, sizeof(*cy_wasm));
 
-    cy_wasm.node_id_bloom.storage  = cy_wasm.node_id_bloom_storage;
-    cy_wasm.node_id_bloom.n_bits   = sizeof(cy_wasm.node_id_bloom_storage) * CHAR_BIT;
-    cy_wasm.node_id_bloom.popcount = 0;
+    cy_wasm->response_extent_with_overhead = 64; // We start from an arbitrary value that just makes sense.
+    cy_wasm->rpc_transfer_id_timeout       = CY_TRANSFER_ID_TIMEOUT_DEFAULT_us;
+    // Set up the memory resources. We could use block pool allocator here as well!
+    cy_wasm->mem.allocate                  = mem_alloc;
+    cy_wasm->mem.deallocate                = mem_free;
+    cy_wasm->mem.user_reference            = cy_wasm;
+    cy_wasm->rx_mem.session                = cy_wasm->mem;
+    cy_wasm->rx_mem.fragment               = cy_wasm->mem;
+    cy_wasm->rx_mem.payload.deallocate     = mem_free;
+    cy_wasm->rx_mem.payload.user_reference = cy_wasm;
+    cy_wasm->rx_sock_err_handler           = default_rx_sock_err_handler;
+    cy_wasm->tx_sock_err_handler           = default_tx_sock_err_handler;
+    cy_wasm->rpc_rx_sock_err_handler       = default_rpc_rx_sock_err_handler;
+
+    cy_wasm->node_id_bloom.storage  = cy_wasm->node_id_bloom_storage;
+    cy_wasm->node_id_bloom.n_bits   = sizeof(cy_wasm->node_id_bloom_storage) * CHAR_BIT;
+    cy_wasm->node_id_bloom.popcount = 0;
 
     cy_err_t res = CY_OK;
 
     if (res == CY_OK) {
         // res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
-        res = cy_new(&cy_wasm.base, &g_platform, uid, node_id, wkv_key(namespace_str));
+        res = cy_new(&cy_wasm->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, wkv_key(namespace_str));
     }
 
     return res;
-}
-
-cy_err_t  cy_wasm_new_main(const uint64_t uid, const uint16_t node_id)
-{
-    cy_err_t res = cy_wasm_new(uid, node_id);
-
-    if (res != CY_OK) {
-        errx(res, "cy_udp_posix_new");
-    }
-
-    cy_t* const cy = &cy_wasm.base;
-
-    // SET UP THE FILE READ SUBSCRIBER.
-    cy_subscriber_t sub_file_read;
-    res = cy_subscribe_c(cy, &sub_file_read, "file/read", 1024, on_file_read_msg);
-
-    if (res != CY_OK) {
-        printf("Failed to subscribe to file/read: %d\n", res);
-    }
-
-    return res;
-}
-
-void cy_destroy_wasm(cy_t instance)
-{
-    // Call the appropriate cleanup function from the library
-    if (instance.platform != NULL) {
-        // Assuming there's a cy_destroy function in the library
-        cy_destroy(&instance);
-    }
-}
-
-cy_err_t cy_wasm_spin_once(void)
-{
-    assert(&cy_wasm != NULL);
-    assert(&cy_wasm.base != NULL);
-
-    return CY_OK;
-    // return spin_once_until(cy_wasm, min_i64(cy_udp_posix_now() + 1000, cy_wasm->base.heartbeat_next));
 }
