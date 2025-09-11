@@ -1,5 +1,6 @@
 // cy_wasm.c
 #include "cy_wasm.h"
+#include "cy_wasm_wit.h"
 
 #include "wkv.h"
 #include "libudpard/libudpard/udpard.h"
@@ -270,10 +271,8 @@ void on_file_read_msg(cy_t* const cy, const cy_arrival_t* const arv)
     // For example, you can read the requested file and send a response
 }
 
-cy_err_t cy_wasm_new(cy_wasm_t* const cy_wasm,
-                          const uint64_t        uid,
-                          const uint32_t        local_iface_address[CY_UDP_POSIX_IFACE_COUNT_MAX],
-                          const size_t          tx_queue_capacity_per_iface)
+cy_err_t cy_wasm_init(cy_wasm_t* const cy_wasm,
+                          const uint64_t        uid)
 {
     assert(cy_wasm != NULL);
     memset(cy_wasm, 0, sizeof(*cy_wasm));
@@ -295,6 +294,47 @@ cy_err_t cy_wasm_new(cy_wasm_t* const cy_wasm,
     cy_wasm->node_id_bloom.storage  = cy_wasm->node_id_bloom_storage;
     cy_wasm->node_id_bloom.n_bits   = sizeof(cy_wasm->node_id_bloom_storage) * CHAR_BIT;
     cy_wasm->node_id_bloom.popcount = 0;
+
+    cy_err_t res = CY_OK;
+
+    printf("cy_wasm pointer: %p, size: %zu\n", (void*)cy_wasm, sizeof(*cy_wasm));
+    printf("response_extent_with_overhead: %u\n", cy_wasm->response_extent_with_overhead);
+
+    // if (res == CY_OK) {
+        // res = cy_new(&cy_udp->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, namespace_);
+        // res = cy_new(&cy_wasm->base, &g_platform, uid, UDPARD_NODE_ID_UNSET, wkv_key(namespace_str));
+    // }
+
+    return res;
+}
+
+cy_err_t cy_wasm_new(cy_wasm_t* const cy_wasm,
+                          const uint64_t        uid)
+{
+    assert(cy_wasm != NULL);
+
+    printf("Architecture: %s-bit\n", (sizeof(void*) == 8) ? "64" : "32");
+
+    printf("sizeof(response_extent_with_overhead): %zu\n", sizeof(cy_wasm->response_extent_with_overhead));
+    printf("sizeof(rpc_transfer_id_timeout): %zu\n", sizeof(cy_wasm->rpc_transfer_id_timeout));
+    printf("sizeof(mem): %zu\n", sizeof(cy_wasm->mem));
+    printf("sizeof(rx_mem): %zu\n", sizeof(cy_wasm->rx_mem));
+    printf("sizeof(rx_sock_err_handler): %zu\n", sizeof(cy_wasm->rx_sock_err_handler));
+    printf("sizeof(tx_sock_err_handler): %zu\n", sizeof(cy_wasm->tx_sock_err_handler));
+    printf("sizeof(rpc_rx_sock_err_handler): %zu\n", sizeof(cy_wasm->rpc_rx_sock_err_handler));
+    printf("sizeof(node_id_bloom): %zu\n", sizeof(cy_wasm->node_id_bloom));
+    printf("sizeof(node_id_bloom_storage): %zu\n", sizeof(cy_wasm->node_id_bloom_storage));
+    printf("sizeof(local_iface_address): %zu\n", sizeof(cy_wasm->local_iface_address));
+    printf("sizeof(base): %zu\n", sizeof(cy_wasm->base));
+
+    printf("response_extent_with_overhead value: %u\n", cy_wasm->response_extent_with_overhead);
+    printf("local_iface_address value: %u\n", cy_wasm->local_iface_address[0]);
+    printf("node_id_bloom.popcount: %lu\n", cy_wasm->node_id_bloom.popcount);
+
+    printf("cy_wasm pointer: %p, size: %zu\n", (void*)cy_wasm, sizeof(*cy_wasm));
+    printf("mem.allocate: %p\n", (void*)cy_wasm->mem.allocate);
+    printf("mem.deallocate: %p\n", (void*)cy_wasm->mem.deallocate);
+    printf("mem.user_reference: %p\n", cy_wasm->mem.user_reference);
 
     cy_err_t res = CY_OK;
 
