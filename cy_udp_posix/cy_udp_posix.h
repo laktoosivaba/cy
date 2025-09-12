@@ -138,6 +138,8 @@ cy_err_t cy_udp_posix_spin_until(cy_udp_posix_t* const cy_udp, const cy_us_t dea
 /// The function is guaranteed to return no later than in the heartbeat period, or in a few ms, which ever is sooner.
 cy_err_t cy_udp_posix_spin_once(cy_udp_posix_t* const cy_udp);
 
+wkv_str_t wkv_key_c(const char* const str);
+
 #ifdef __cplusplus
 }
 #endif

@@ -788,3 +788,9 @@ cy_err_t cy_udp_posix_spin_once(cy_udp_posix_t* const cy_udp)
     assert(cy_udp != NULL);
     return spin_once_until(cy_udp, min_i64(cy_udp_posix_now() + 1000, cy_udp->base.heartbeat_next));
 }
+
+wkv_str_t wkv_key_c(const char* const str)
+{
+    return wkv_key(str);
+}
+
